@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Daily Task Tracker</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='4' fill='%232a78d6'/><path d='M4 8.5l2.5 2.5 5.5-6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+    <link rel="stylesheet" href="/static/css/app.css">
+    <script src="/static/vendor/fullcalendar/index.global.min.js"></script>
+    <script type="module" src="/static/js/app.js"></script>
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <a class="brand" href="#/overview">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 16 16" width="14" height="14"><path d="M4 8.5l2.5 2.5 5.5-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          Daily Tasks
+        </a>
+        <nav class="nav" aria-label="Main">
+          <a href="#/overview" data-nav="overview">Overview</a>
+          <a href="#/calendar" data-nav="calendar">Calendar</a>
+          <a href="#/projects" data-nav="projects">Projects</a>
+        </nav>
+        <div class="sidebar-section">
+          <div class="sidebar-heading">
+            <span>Folders</span>
+            <button id="new-folder-btn" class="icon-btn sm" title="New folder" aria-label="New folder">
+              <svg class="icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+            </button>
+          </div>
+          <ul id="folder-list" class="folder-list"></ul>
+        </div>
+        <div class="sidebar-footer">
+          <button id="theme-toggle" class="btn btn-ghost btn-sm"><span id="theme-label">Theme: auto</span></button>
+          <a class="muted small" href="/docs" target="_blank" rel="noopener">API docs</a>
+        </div>
+      </aside>
+      <main class="main">
+        <header class="topbar">
+          <h1 id="page-title"></h1>
+          <div id="timer-widget" class="timer-widget"></div>
+        </header>
+        <section id="view" class="view-container"></section>
+      </main>
+    </div>
+    <div id="drawer" class="drawer" hidden></div>
+    <dialog id="dialog"></dialog>
+    <dialog id="confirm" class="confirm"></dialog>
+    <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>
