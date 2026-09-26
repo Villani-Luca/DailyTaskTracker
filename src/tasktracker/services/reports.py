@@ -24,7 +24,7 @@ from tasktracker.schemas import (
 )
 from tasktracker.services import calendar, tasks
 from tasktracker.services.errors import InvalidOperationError
-from tasktracker.services.folders import list_folders
+from tasktracker.services.folders import get_folder, list_folders
 
 INBOX_NAME = "Inbox"
 MAX_REPORT_DAYS = 731  # two years
@@ -136,20 +136,60 @@ def folder_stats(session: Session, user_id: int, today: date) -> list[FolderStat
     return stats
 
 
+def report_blocks(
+    session: Session,
+    user_id: int,
+    starts_at: datetime,
+    ends_at: datetime,
+    *,
+    folder_id: int | None = None,
+    inbox: bool = False,
+) -> list[TimeBlock]:
+    """The blocks overlapping ``[starts_at, ends_at)``, all of them or one folder's (or
+    the inbox's). A block belongs to its task's folder, an appointment to its own."""
+    if ends_at <= starts_at:
+        raise InvalidOperationError("The end of the range must be after its start")
+    if report_days(starts_at, ends_at)[1] > MAX_REPORT_DAYS:
+        raise InvalidOperationError("Pick a range of at most two years")
+    if folder_id is not None and not inbox:
+        get_folder(session, user_id, folder_id)  # someone else's folder is a 404
+
+    blocks = calendar.list_blocks(session, user_id, starts_at, ends_at)
+    if inbox:
+        return [b for b in blocks if b.effective_folder_id is None]
+    if folder_id is not None:
+        return [b for b in blocks if b.effective_folder_id == folder_id]
+    return blocks
+
+
+def report_days(starts_at: datetime, ends_at: datetime) -> tuple[date, int]:
+    """The first day a range touches, and how many days it touches."""
+    first_day, last_day = starts_at.date(), (ends_at - timedelta(microseconds=1)).date()
+    return first_day, (last_day - first_day).days + 1
+
+
+def clip(block: TimeBlock, starts_at: datetime, ends_at: datetime) -> tuple[datetime, datetime]:
+    """The part of ``block`` inside the range; a running timer runs until now."""
+    return max(block.starts_at, starts_at), min(block.ends_at or now(), ends_at)
+
+
 def time_report(
-    session: Session, user_id: int, starts_at: datetime, ends_at: datetime
+    session: Session,
+    user_id: int,
+    starts_at: datetime,
+    ends_at: datetime,
+    *,
+    folder_id: int | None = None,
+    inbox: bool = False,
 ) -> TimeReport:
     """Planned vs. tracked minutes in ``[starts_at, ends_at)`` per folder, per task (or
-    appointment) and per day, and how many tasks were completed in that time.
+    appointment) and per day, and how many tasks were completed in that time; for all
+    folders, or only one (or the inbox).
 
     Blocks are clipped to the range, and split at midnight between days.
     """
-    if ends_at <= starts_at:
-        raise InvalidOperationError("The end of the range must be after its start")
-    first_day, last_day = starts_at.date(), (ends_at - timedelta(microseconds=1)).date()
-    day_count = (last_day - first_day).days + 1
-    if day_count > MAX_REPORT_DAYS:
-        raise InvalidOperationError("Pick a range of at most two years")
+    blocks = report_blocks(session, user_id, starts_at, ends_at, folder_id=folder_id, inbox=inbox)
+    first_day, day_count = report_days(starts_at, ends_at)
 
     by_folder: dict[int | None, Counter[BlockKind]] = defaultdict(Counter)
     by_item: dict[Hashable, Counter[BlockKind]] = defaultdict(Counter)
@@ -157,12 +197,10 @@ def time_report(
         first_day + timedelta(days=i): Counter() for i in range(day_count)
     }
     items: dict[Hashable, TimeBlock] = {}  # the first block seen for each task/appointment
-    current = now()
-    for block in calendar.list_blocks(session, user_id, starts_at, ends_at):
+    for block in blocks:
         key = block.task_id or ("appointment", block.display_title, block.effective_folder_id)
         items.setdefault(key, block)
-        start, end = max(block.starts_at, starts_at), min(block.ends_at or current, ends_at)
-        for day, seconds in _split_by_day(start, end):
+        for day, seconds in _split_by_day(*clip(block, starts_at, ends_at)):
             by_folder[block.effective_folder_id][block.kind] += seconds
             by_item[key][block.kind] += seconds
             by_day[day][block.kind] += seconds
@@ -195,11 +233,14 @@ def time_report(
     task_rows = [r for r in task_rows if r.planned_minutes or r.tracked_minutes]
     task_rows.sort(key=lambda r: (-r.tracked_minutes, -r.planned_minutes, r.title.lower()))
 
-    completed = session.scalar(
-        select(func.count(Task.id)).where(
-            Task.user_id == user_id, Task.completed_at >= starts_at, Task.completed_at < ends_at
-        )
+    completed_stmt = select(func.count(Task.id)).where(
+        Task.user_id == user_id, Task.completed_at >= starts_at, Task.completed_at < ends_at
     )
+    if inbox:
+        completed_stmt = completed_stmt.where(Task.folder_id.is_(None))
+    elif folder_id is not None:
+        completed_stmt = completed_stmt.where(Task.folder_id == folder_id)
+    completed = session.scalar(completed_stmt)
     return TimeReport(
         starts_at=starts_at,
         ends_at=ends_at,

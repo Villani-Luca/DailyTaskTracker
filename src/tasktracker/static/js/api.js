@@ -85,6 +85,10 @@ export const api = {
     stop: () => request('POST', '/timer/stop'),
   },
   overview: (days = 6) => request('GET', `/overview${query({ days })}`),
-  timeReport: (startsAt, endsAt) =>
-    request('GET', `/reports/time${query({ starts_at: startsAt, ends_at: endsAt })}`),
+  // filter: {} for every folder, { folder_id } for one, { inbox: true } for the inbox
+  timeReport: (startsAt, endsAt, filter = {}) =>
+    request('GET', `/reports/time${query({ starts_at: startsAt, ends_at: endsAt, ...filter })}`),
+  // The same report as an Excel file: a plain link, the login cookie goes along.
+  timeReportXlsxUrl: (startsAt, endsAt, filter = {}) =>
+    `/api/reports/time.xlsx${query({ starts_at: startsAt, ends_at: endsAt, ...filter })}`,
 };

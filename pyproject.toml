@@ -13,6 +13,7 @@ dependencies = [
     "sqlalchemy>=2.0.36",
     "tzdata>=2024.1",
     "uvicorn>=0.30",
+    "xlsxwriter>=3.2",
 ]
 
 [project.scripts]
@@ -22,6 +23,7 @@ tasktracker-users = "tasktracker.users_cli:main"
 [dependency-groups]
 dev = [
     "httpx2>=2.13.1",
+    "openpyxl>=3.1",  # reads the exported workbooks back in tests
     "pytest>=8",
     "ruff>=0.6",
 ]

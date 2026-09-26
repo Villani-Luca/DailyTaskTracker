@@ -879,6 +879,7 @@ dialog.confirm { width: min(420px, calc(100vw - 32px)); }
 /* --- Reports ---------------------------------------------------------------------- */
 
 .range-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+a.btn, a.btn:hover { text-decoration: none; }
 .report { display: flex; flex-direction: column; gap: 20px; transition: opacity 0.15s; }
 .report.is-loading { opacity: 0.6; }
 .report-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 20px; align-items: start; }

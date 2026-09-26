@@ -196,6 +196,18 @@ def test_users_only_see_their_own_records(client, bob, alice_data):
         ("POST", "/api/blocks", lambda ids: {**SLOT, "task_id": ids["task"]}),
         ("POST", "/api/blocks", lambda ids: {**SLOT, "title": "x", "folder_id": ids["folder"]}),
         ("POST", "/api/timer/start", lambda ids: {"task_id": ids["task"]}),
+        (
+            "GET",
+            "/api/reports/time?starts_at=2026-09-25T00:00&ends_at=2026-09-26T00:00"
+            "&folder_id={folder}",
+            None,
+        ),
+        (
+            "GET",
+            "/api/reports/time.xlsx?starts_at=2026-09-25T00:00&ends_at=2026-09-26T00:00"
+            "&folder_id={folder}",
+            None,
+        ),
     ],
 )
 def test_other_users_records_look_like_they_do_not_exist(

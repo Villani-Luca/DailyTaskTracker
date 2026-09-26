@@ -23,8 +23,10 @@ see how much time you actually spend on them.
     weeks or months, until a date. Change one event, or this and the following ones;
     delete one, the following ones, or all. Dragging on the grid moves one event only.
   - The side panel totals time spent and planned per folder for the visible range.
-- **Reports**: pick any range (this week, last month, a custom one...) and see the time
-  spent and planned per day, per folder and per task, and how many tasks were completed.
+- **Reports**: pick any range (this week, last month, a custom one...) and a project (or
+  all of them), and see the time spent and planned per day, per folder and per task, and
+  how many tasks were completed. **Export to Excel** downloads the same report, plus every
+  calendar block in it as a timesheet; hours are numbers, so they add up in Excel.
 - **Timer**: press ▶ on a task to start tracking; the running timer sits in the top bar.
 - **Accounts**: log in with a username and password; everyone sees only their own
   folders, tasks and calendar. Accounts are created by hand (there is no sign-up).

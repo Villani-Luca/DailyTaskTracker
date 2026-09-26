@@ -4,10 +4,10 @@ import { api } from '../api.js';
 import { kpiHTML } from '../components/kpi.js';
 import { openTaskDrawer } from '../components/taskDrawer.js';
 import { timeBarsHTML } from '../components/timeBars.js';
-import { folderName } from '../store.js';
+import { folderName, store } from '../store.js';
 import {
-  STATUS_LABEL, addDays, dateISO, esc, fmtDay, fmtMinutes, parseDay, setPageTitle, showError,
-  startOfWeek, toast, todayISO,
+  STATUS_LABEL, addDays, dateISO, esc, fmtDay, fmtMinutes, icons, parseDay, setPageTitle,
+  showError, startOfWeek, toast, todayISO,
 } from '../util.js';
 
 const PRESETS = [
@@ -23,8 +23,14 @@ const MAX_DAY_COLUMNS = 62; // past two months, the chart shows weeks
 const MAX_AXIS_LABELS = 8;
 const TICK_STEPS = [15, 30, 60, 120, 180, 240, 360, 480, 720, 1200, 1440, 2400, 3600, 6000];
 
-// The chosen range survives leaving the page and coming back.
-const state = { preset: 'this-week', from: null, to: null };
+// The chosen range and project survive leaving the page and coming back.
+// project: '' for every folder, 'inbox', or a folder id.
+const state = { preset: 'this-week', from: null, to: null, project: '' };
+
+function projectFilter() {
+  if (state.project === 'inbox') return { inbox: true };
+  return state.project ? { folder_id: state.project } : {};
+}
 
 function applyPreset() {
   const preset = PRESETS.find(([key]) => key === state.preset);
@@ -134,6 +140,7 @@ function tasksHTML(rows) {
 function reportHTML(report) {
   const chart = report.days.length > 1 ? columns(report.days) : null;
   const perDay = Math.round(report.tracked_minutes / report.days.length);
+  const byFolder = !state.project; // one project: its folder bar would only repeat the totals
   return `
     <div class="kpi-row">
       ${kpiHTML('Time spent', fmtMinutes(report.tracked_minutes))}
@@ -141,7 +148,7 @@ function reportHTML(report) {
       ${kpiHTML('Tasks completed', String(report.completed_tasks))}
       ${chart ? kpiHTML('Spent per day, on average', fmtMinutes(perDay)) : ''}
     </div>
-    <div class="report-grid${chart ? '' : ' is-single'}">
+    <div class="report-grid${chart && byFolder ? '' : ' is-single'}">
       ${
         chart
           ? `<section class="card">
@@ -150,10 +157,14 @@ function reportHTML(report) {
             </section>`
           : ''
       }
-      <section class="card">
-        <header class="card-header"><h2>By folder</h2></header>
-        ${timeBarsHTML(report.folders, 'No time in this range.')}
-      </section>
+      ${
+        byFolder
+          ? `<section class="card">
+              <header class="card-header"><h2>By folder</h2></header>
+              ${timeBarsHTML(report.folders, 'No time in this range.')}
+            </section>`
+          : ''
+      }
     </div>
     <section class="card">
       <header class="card-header"><h2>By task</h2><span class="count">${report.tasks.length}</span></header>
@@ -165,7 +176,7 @@ export async function mount(root) {
   setPageTitle('Reports');
   if (state.preset !== 'custom' || !state.from) applyPreset();
   root.innerHTML = `
-    <form class="range-bar" aria-label="Date range">
+    <form class="range-bar" aria-label="Report filters">
       <select name="preset" aria-label="Range">
         ${PRESETS.map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}
         <option value="custom">Custom range</option>
@@ -173,29 +184,48 @@ export async function mount(root) {
       <input type="date" name="from" aria-label="From" required>
       <span class="muted" aria-hidden="true">–</span>
       <input type="date" name="to" aria-label="To" required>
+      <select name="project" aria-label="Project"></select>
+      <span class="spacer"></span>
+      <a class="btn" data-export download title="Download this report, with every calendar block, as an Excel file">
+        ${icons.download}Export to Excel</a>
     </form>
     <div class="report" data-report></div>`;
 
   const form = root.querySelector('.range-bar');
   const content = root.querySelector('[data-report]');
+  const exportLink = form.querySelector('[data-export]');
   let loading = 0;
+
+  // Folders can be added, renamed or deleted elsewhere: rebuild the list on every load.
+  const fillProjects = () => {
+    const options = [['', 'All projects'], ['inbox', 'Inbox'], ...store.folders.map((f) => [String(f.id), f.name])];
+    if (!options.some(([value]) => value === state.project)) state.project = '';
+    form.elements.project.innerHTML = options
+      .map(([value, label]) => `<option value="${value}">${esc(label)}</option>`)
+      .join('');
+    form.elements.project.value = state.project;
+  };
 
   const syncForm = () => {
     form.elements.preset.value = state.preset;
     form.elements.from.value = state.from;
     form.elements.to.value = state.to;
+    form.elements.project.value = state.project;
   };
 
   async function load() {
+    fillProjects();
     if (state.to < state.from) {
       toast('The range must end on or after its first day', 'error');
       return;
     }
     const token = ++loading;
     content.classList.add('is-loading'); // keep the old numbers on screen until the new ones arrive
+    const start = `${state.from}T00:00:00`;
+    const end = `${dateISO(addDays(parseDay(state.to), 1))}T00:00:00`;
+    exportLink.href = api.timeReportXlsxUrl(start, end, projectFilter());
     try {
-      const end = dateISO(addDays(parseDay(state.to), 1));
-      const report = await api.timeReport(`${state.from}T00:00:00`, `${end}T00:00:00`);
+      const report = await api.timeReport(start, end, projectFilter());
       if (token === loading) content.innerHTML = reportHTML(report);
     } catch (err) {
       showError(err);
@@ -208,6 +238,8 @@ export async function mount(root) {
     if (e.target.name === 'preset') {
       state.preset = e.target.value;
       applyPreset();
+    } else if (e.target.name === 'project') {
+      state.project = e.target.value;
     } else {
       state.preset = 'custom';
       state.from = form.elements.from.value || state.from;
@@ -225,6 +257,7 @@ export async function mount(root) {
   content.addEventListener('click', openRow);
   content.addEventListener('keydown', (e) => e.key === 'Enter' && openRow(e));
 
+  fillProjects();
   syncForm();
   await load();
   return { refresh: load };
