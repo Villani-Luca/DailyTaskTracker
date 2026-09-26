@@ -6,6 +6,7 @@ import { confirmDialog } from '../components/dialog.js';
 import { openFolderDialog } from '../components/folderDialog.js';
 import { acceptDroppedFiles, openImportDialog } from '../components/importDialog.js';
 import { kpiHTML } from '../components/kpi.js';
+import { bindPaneTabs, paneTabsHTML } from '../components/panes.js';
 import { statusBarHTML } from '../components/statusBar.js';
 import { bindTaskActions, taskListHTML } from '../components/taskList.js';
 import { folderById, loadFolders, notifyChange } from '../store.js';
@@ -40,19 +41,19 @@ function appointmentHTML(a) {
   const b = a.block;
   const meta = [];
   if (b.recurrence) {
-    const left = a.upcoming ? ` · ${a.upcoming} of ${a.events} to come` : ` · ${a.events} events`;
+    const left = a.upcoming ? ` Â· ${a.upcoming} of ${a.events} to come` : ` Â· ${a.events} events`;
     meta.push(`<span>${icons.repeat}${esc(describeRecurrence(b.recurrence, b.starts_at))}${left}</span>`);
   } else if (a.events > 1) {
     meta.push(`<span>${a.events} events</span>`);
   }
   if (b.location) meta.push(`<span class="appt-location">${icons.pin}${esc(b.location)}</span>`);
   if (b.source) meta.push(`<span class="muted">From ${esc(b.source)}</span>`);
-  const spent = a.tracked_minutes ? ` · ${fmtMinutes(a.tracked_minutes)} spent` : '';
+  const spent = a.tracked_minutes ? ` Â· ${fmtMinutes(a.tracked_minutes)} spent` : '';
   return `
     <li><button type="button" class="appt-row" data-block-id="${b.id}">
       <span class="appt-when">
         <strong>${relDay(dateISO(new Date(b.starts_at)))}</strong>
-        <span>${fmtTime(b.starts_at)}${b.ends_at ? `–${fmtTime(b.ends_at)}` : ''}</span>
+        <span>${fmtTime(b.starts_at)}${b.ends_at ? `â€“${fmtTime(b.ends_at)}` : ''}</span>
       </span>
       <i class="sch-bar kind-${b.kind}"></i>
       <span class="appt-main">
@@ -72,17 +73,19 @@ function appointmentsHTML(list) {
       <button type="button" class="btn btn-sm" data-action="add-appointment">${icons.plus}Add</button>
       <button type="button" class="btn btn-sm" data-action="import">${icons.upload}Import</button>
     </div>
-    ${
-      upcoming.length
-        ? `<ul class="appt-list">${upcoming.map(appointmentHTML).join('')}</ul>`
-        : `<p class="empty">${past.length ? 'Nothing coming up.' : 'No appointments yet. Add one, or import an invite (.ics), an email or a calendar link. You can also drop a file here.'}</p>`
-    }
-    ${
-      past.length
-        ? `<details class="appt-past"><summary>Past (${past.length})</summary>
-             <ul class="appt-list">${past.map(appointmentHTML).join('')}</ul></details>`
-        : ''
-    }`;
+    <div class="slot-body">
+      ${
+        upcoming.length
+          ? `<ul class="appt-list">${upcoming.map(appointmentHTML).join('')}</ul>`
+          : `<p class="empty">${past.length ? 'Nothing coming up.' : 'No appointments yet. Add one, or import an invite (.ics), an email or a calendar link. You can also drop a file here.'}</p>`
+      }
+      ${
+        past.length
+          ? `<details class="appt-past"><summary>Past (${past.length})</summary>
+               <ul class="appt-list">${past.map(appointmentHTML).join('')}</ul></details>`
+          : ''
+      }
+    </div>`;
 }
 
 const EMPTY_STATS = {
@@ -100,7 +103,6 @@ export async function mount(root, param) {
 
   root.innerHTML = `
     <div class="folder-header" data-header></div>
-    <div data-stats></div>
     <form class="quick-add card" autocomplete="off">
       <input name="title" placeholder="Add a task to this folderâ€¦" aria-label="Task title" maxlength="200">
       <select name="priority" aria-label="Priority">
@@ -109,18 +111,25 @@ export async function mount(root, param) {
       <input type="date" name="planned_date" aria-label="Planned for">
       <button class="btn btn-primary" type="submit">${icons.plus}Add task</button>
     </form>
-    <div class="toolbar">
-      <div class="chips" role="group" aria-label="Filter by status" data-chips></div>
-      <input type="search" placeholder="Search tasksâ€¦" aria-label="Search tasks" data-search>
-    </div>
-    <div data-list></div>
-    <section class="card appointments" data-appointments></section>`;
+    ${paneTabsHTML([['tasks', 'Tasks'], ['appointments', 'Appointments'], ['stats', 'Stats']])}
+    <div class="folder-layout panes">
+      <div class="pane pane-stats" data-pane="stats" data-stats></div>
+      <section class="card slot pane pane-tasks" data-pane="tasks">
+        <div class="toolbar">
+          <div class="chips" role="group" aria-label="Filter by status" data-chips></div>
+          <input type="search" placeholder="Search tasksâ€¦" aria-label="Search tasks" data-search>
+        </div>
+        <div class="slot-body" data-list></div>
+      </section>
+      <section class="card slot pane pane-appts appointments" data-pane="appointments" data-appointments></section>
+    </div>`;
 
   const header = root.querySelector('[data-header]');
   const list = root.querySelector('[data-list]');
   const chips = root.querySelector('[data-chips]');
   const form = root.querySelector('.quick-add');
   const appointmentsEl = root.querySelector('[data-appointments]');
+  const tabs = bindPaneTabs(root, 'folder');
   let pastOpen = false;
   let appointmentBlocks = new Map();
 
@@ -174,6 +183,8 @@ export async function mount(root, param) {
     renderList();
     appointmentBlocks = new Map(appointments.map((a) => [a.block.id, a.block]));
     appointmentsEl.innerHTML = appointmentsHTML(appointments);
+    const upcoming = appointments.filter((a) => a.upcoming).length;
+    tabs.setCounts({ tasks: tasks.filter((t) => t.status !== 'done').length || null, appointments: upcoming || null });
     const details = appointmentsEl.querySelector('.appt-past');
     if (details) {
       details.open = pastOpen;

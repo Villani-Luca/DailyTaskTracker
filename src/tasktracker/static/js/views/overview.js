@@ -3,6 +3,7 @@
 import { api } from '../api.js';
 import { openBlockDialog } from '../components/blockDialog.js';
 import { kpiHTML } from '../components/kpi.js';
+import { bindPaneTabs, paneTabsHTML } from '../components/panes.js';
 import { bindTaskActions, taskListHTML } from '../components/taskList.js';
 import { notifyChange, store } from '../store.js';
 import {
@@ -30,52 +31,56 @@ function scheduleHTML(blocks) {
     .join('')}</ul>`;
 }
 
-function dayCardHTML(day) {
+function dayHTML(day) {
   const open = day.tasks.filter((t) => t.status !== 'done').length;
-  return `<section class="card day-card">
-    <header class="day-card-header">
-      <strong>${relDay(day.day)}</strong>
-      <span class="muted small">${fmtDay(day.day)}</span>
+  const label = relDay(day.day);
+  const date = fmtDay(day.day);
+  return `<section class="day-group">
+    <header class="day-group-header">
+      <strong>${label}</strong>
+      <span class="muted small">${label === date ? '' : `${date} · `}${open} open · ${fmtMinutes(day.planned_minutes)} planned</span>
     </header>
-    <p class="day-card-meta">${open} open · ${fmtMinutes(day.planned_minutes)} planned</p>
     ${taskListHTML(day.tasks, { compact: true }, 'Nothing planned')}
   </section>`;
 }
 
-function render(data) {
-  const [today, ...upcoming] = data.days;
+function kpisHTML(data) {
+  const today = data.days[0];
   const done = today.tasks.filter((t) => t.status === 'done').length;
   return `
-    <div class="kpi-row">
-      ${kpiHTML("Today's tasks done", `${done} / ${today.tasks.length}`)}
-      ${kpiHTML('Time spent today', fmtMinutes(today.tracked_minutes))}
-      ${kpiHTML('Planned today', fmtMinutes(today.planned_minutes))}
-      ${kpiHTML('In progress', String(data.active.length))}
-      ${kpiHTML('Overdue', String(data.overdue.length), { alert: data.overdue.length > 0 })}
-    </div>
-    <div class="overview-grid">
-      <section class="card">
-        <header class="card-header">
-          <h2>Today</h2>
-          <span class="muted">${fmtDay(today.day, { weekday: 'long', day: 'numeric', month: 'long' })}</span>
-        </header>
+    ${kpiHTML("Today's tasks done", `${done} / ${today.tasks.length}`)}
+    ${kpiHTML('Time spent today', fmtMinutes(today.tracked_minutes))}
+    ${kpiHTML('Planned today', fmtMinutes(today.planned_minutes))}
+    ${kpiHTML('In progress', String(data.active.length))}
+    ${kpiHTML('Overdue', String(data.overdue.length), { alert: data.overdue.length > 0 })}`;
+}
+
+function render(data) {
+  const [today, ...upcoming] = data.days;
+  return `
+    <section class="card slot pane pane-today" data-pane="today">
+      <header class="card-header">
+        <h2>Today</h2>
+        <span class="muted">${fmtDay(today.day, { weekday: 'long', day: 'numeric', month: 'long' })}</span>
+      </header>
+      <div class="slot-body">
         ${taskListHTML(today.tasks, { showPlanned: false }, 'Nothing planned for today. Give a task a planned date, or drag it onto the calendar.')}
         <h3 class="subhead">Schedule</h3>
         ${scheduleHTML(today.blocks)}
-      </section>
-      <div class="stack">
-        <section class="card">
-          <header class="card-header"><h2>In progress</h2><span class="count">${data.active.length}</span></header>
-          ${taskListHTML(data.active, {}, 'Nothing in progress. Start a timer on a task to begin.')}
-        </section>
-        <section class="card">
-          <header class="card-header"><h2>Overdue</h2><span class="count">${data.overdue.length}</span></header>
-          ${taskListHTML(data.overdue, {}, 'Nothing overdue.')}
-        </section>
       </div>
-    </div>
-    <h2 class="section-title">Next days</h2>
-    <div class="days-grid">${upcoming.map(dayCardHTML).join('')}</div>`;
+    </section>
+    <section class="card slot pane pane-active" data-pane="active">
+      <header class="card-header"><h2>In progress</h2><span class="count">${data.active.length}</span></header>
+      <div class="slot-body">${taskListHTML(data.active, {}, 'Nothing in progress. Start a timer on a task to begin.')}</div>
+    </section>
+    <section class="card slot pane pane-overdue" data-pane="overdue">
+      <header class="card-header"><h2>Overdue</h2><span class="count">${data.overdue.length}</span></header>
+      <div class="slot-body">${taskListHTML(data.overdue, {}, 'Nothing overdue.')}</div>
+    </section>
+    <section class="card slot pane pane-next" data-pane="next">
+      <header class="card-header"><h2>Next days</h2></header>
+      <div class="slot-body">${upcoming.map(dayHTML).join('')}</div>
+    </section>`;
 }
 
 function fillFolderSelect(select) {
@@ -95,10 +100,14 @@ export async function mount(root) {
       <input type="date" name="planned_date" aria-label="Planned for" value="${todayISO()}">
       <button class="btn btn-primary" type="submit">${icons.plus}Add task</button>
     </form>
-    <div data-content></div>`;
+    <div class="kpi-row kpi-strip" data-kpis></div>
+    ${paneTabsHTML([['today', 'Today'], ['active', 'In progress'], ['overdue', 'Overdue'], ['next', 'Next days']])}
+    <div class="overview-grid panes" data-content></div>`;
 
   const form = root.querySelector('.quick-add');
+  const kpis = root.querySelector('[data-kpis]');
   const content = root.querySelector('[data-content]');
+  const tabs = bindPaneTabs(root, 'overview');
   let blocksById = new Map();
 
   form.addEventListener('submit', async (e) => {
@@ -129,7 +138,10 @@ export async function mount(root) {
     fillFolderSelect(form.elements.folder_id);
     const data = await api.overview(DAYS_AHEAD);
     blocksById = new Map(data.days.flatMap((d) => d.blocks).map((b) => [b.id, b]));
+    kpis.innerHTML = kpisHTML(data);
     content.innerHTML = render(data);
+    tabs.apply();
+    tabs.setCounts({ active: data.active.length || null, overdue: data.overdue.length || null });
   };
   await load();
   return { refresh: load };

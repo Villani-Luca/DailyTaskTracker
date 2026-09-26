@@ -6,6 +6,7 @@
 import { api } from '../api.js';
 import { openBlockDialog } from '../components/blockDialog.js';
 import { acceptDroppedFiles, openImportDialog } from '../components/importDialog.js';
+import { bindPaneTabs, paneTabsHTML } from '../components/panes.js';
 import { openTaskDrawer } from '../components/taskDrawer.js';
 import { timeBarsHTML } from '../components/timeBars.js';
 import { folderName, notifyChange } from '../store.js';
@@ -16,8 +17,30 @@ import {
 
 const PREFS_KEY = 'tasktracker.calendar';
 const DEFAULT_PREFS = { view: 'timeGridWeek', planned: true, tracked: true, dayTasks: true };
-const VIEW_NOUN = { dayGridMonth: 'month', timeGridWeek: 'week', listWeek: 'week', timeGridDay: 'day' };
+const SUMMARY_TITLE = {
+  dayGridMonth: 'Time this month',
+  timeGridWeek: 'Time this week',
+  listWeek: 'Time this week',
+  timeGrid3Day: 'Time in these 3 days',
+  timeGridDay: 'Time this day',
+};
 const TIME_FORMAT = { hour: '2-digit', minute: '2-digit', hour12: false };
+
+// Seven columns don't fit a phone: there, the week view shows three days instead.
+const NARROW = window.matchMedia('(max-width: 760px)');
+
+function fitView(view) {
+  if (NARROW.matches) return view === 'timeGridWeek' ? 'timeGrid3Day' : view;
+  return view === 'timeGrid3Day' ? 'timeGridWeek' : view;
+}
+
+function headerToolbar() {
+  const views = `dayGridMonth,${fitView('timeGridWeek')},timeGridDay,listWeek`;
+  // On a phone the chunks stack (see app.css): arrows around the title, then the rest.
+  return NARROW.matches
+    ? { left: 'prev title next', center: '', right: `today ${views}` }
+    : { left: 'prev,next today', center: 'title', right: views };
+}
 
 function loadPrefs() {
   try {
@@ -67,31 +90,35 @@ export async function mount(root) {
   setPageTitle('Calendar');
   const prefs = loadPrefs();
   root.innerHTML = `
-    <div class="calendar-layout">
-      <div class="calendar-main card"><div data-calendar></div></div>
+    ${paneTabsHTML([['calendar', 'Calendar'], ['tasks', 'Open tasks'], ['time', 'Time'], ['options', 'Options']])}
+    <div class="calendar-layout panes">
+      <div class="calendar-main card pane" data-pane="calendar"><div data-calendar></div></div>
       <aside class="calendar-side">
-        <section class="card">
-          <h3>Show</h3>
-          <label class="toggle"><input type="checkbox" data-pref="planned"${prefs.planned ? ' checked' : ''}>
-            <span class="legend-swatch planned"></span>Planned time</label>
-          <label class="toggle"><input type="checkbox" data-pref="tracked"${prefs.tracked ? ' checked' : ''}>
-            <span class="legend-swatch tracked"></span>Time spent</label>
-          <label class="toggle"><input type="checkbox" data-pref="dayTasks"${prefs.dayTasks ? ' checked' : ''}>
-            <span class="legend-swatch daytask"></span>Tasks planned for the day</label>
-          <p class="hint">Colors come from each folder. Drag on the grid to add a block.</p>
+        <section class="card slot pane calendar-options" data-pane="options">
+          <div class="slot-body">
+            <h3>Show</h3>
+            <label class="toggle"><input type="checkbox" data-pref="planned"${prefs.planned ? ' checked' : ''}>
+              <span class="legend-swatch planned"></span>Planned time</label>
+            <label class="toggle"><input type="checkbox" data-pref="tracked"${prefs.tracked ? ' checked' : ''}>
+              <span class="legend-swatch tracked"></span>Time spent</label>
+            <label class="toggle"><input type="checkbox" data-pref="dayTasks"${prefs.dayTasks ? ' checked' : ''}>
+              <span class="legend-swatch daytask"></span>Tasks planned for the day</label>
+            <p class="hint">Colors come from each folder.
+              <span class="wide-only">Drag on the grid to add a block.</span>
+              <span class="phone-only">Press and hold on the grid to add a block.</span></p>
+            <h3 class="options-divider">Appointments</h3>
+            <button type="button" class="btn btn-sm" data-import>${icons.upload}Import invite, email or calendar</button>
+            <p class="hint">From an .ics file, a saved email (.eml), pasted text or a calendar link.
+              Or drop the file on the calendar.</p>
+          </div>
         </section>
-        <section class="card">
-          <h3>Appointments</h3>
-          <button type="button" class="btn btn-sm" data-import>${icons.upload}Import invite, email or calendar</button>
-          <p class="hint">From an .ics file, a saved email (.eml), pasted text or a calendar link.
-            Or drop the file on the calendar.</p>
-        </section>
-        <section class="card" data-summary></section>
-        <section class="card">
+        <section class="card slot pane calendar-summary" data-pane="time" data-summary></section>
+        <section class="card slot pane calendar-tasks" data-pane="tasks">
           <h3>Open tasks</h3>
-          <p class="hint">Drag a task onto the calendar to schedule it.</p>
+          <p class="hint wide-only">Drag a task onto the calendar to schedule it.</p>
+          <p class="hint phone-only">Tap a task to open it and plan it.</p>
           <input type="search" placeholder="Filter…" aria-label="Filter open tasks" data-task-filter>
-          <div class="drag-list" data-drag-list></div>
+          <div class="drag-list slot-body" data-drag-list></div>
         </section>
       </aside>
     </div>`;
@@ -197,9 +224,10 @@ export async function mount(root) {
   }
 
   const calendar = new FullCalendar.Calendar(root.querySelector('[data-calendar]'), {
-    initialView: prefs.view,
-    headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek' },
+    initialView: fitView(prefs.view),
+    headerToolbar: headerToolbar(),
     buttonText: { today: 'Today', month: 'Month', week: 'Week', day: 'Day', list: 'List' },
+    views: { timeGrid3Day: { type: 'timeGrid', duration: { days: 3 }, buttonText: '3 days' } },
     firstDay: 1,
     height: '100%',
     nowIndicator: true,
@@ -208,6 +236,11 @@ export async function mount(root) {
     allDayText: 'Tasks',
     dayMaxEvents: true,
     eventDisplay: 'block',
+    // Short blocks stay readable: at least one line tall, one line of title when under
+    // ~25 minutes (see .fc-timegrid-event-short in app.css), and side by side, not stacked.
+    eventMinHeight: 18,
+    eventShortHeight: 30,
+    slotEventOverlap: false,
     eventTimeFormat: TIME_FORMAT,
     slotLabelFormat: TIME_FORMAT,
     editable: true,
@@ -261,13 +294,15 @@ export async function mount(root) {
     if (!range) return;
     const report = await api.timeReport(toLocalISO(range.start), toLocalISO(range.end));
     summaryEl.innerHTML = `
-      <h3>Time this ${VIEW_NOUN[range.view.type] ?? 'period'}</h3>
-      <div class="summary-totals">
-        <div><span class="label">Spent</span><strong>${fmtMinutes(report.tracked_minutes)}</strong></div>
-        <div><span class="label">Planned</span><strong>${fmtMinutes(report.planned_minutes)}</strong></div>
-      </div>
-      ${timeBarsHTML(report.folders)}
-      <p class="hint"><a href="#/reports">Open reports</a> for any range of dates.</p>`;
+      <h3>${SUMMARY_TITLE[range.view.type] ?? 'Time in this period'}</h3>
+      <div class="slot-body">
+        <div class="summary-totals">
+          <div><span class="label">Spent</span><strong>${fmtMinutes(report.tracked_minutes)}</strong></div>
+          <div><span class="label">Planned</span><strong>${fmtMinutes(report.planned_minutes)}</strong></div>
+        </div>
+        ${timeBarsHTML(report.folders)}
+        <p class="hint"><a href="#/reports">Open reports</a> for any range of dates.</p>
+      </div>`;
   }
 
   function renderDragList() {
@@ -307,6 +342,17 @@ export async function mount(root) {
     if (item) openTaskDrawer(Number(item.dataset.taskId));
   });
 
+  // Rotating a tablet or resizing a window can cross the phone breakpoint.
+  const onNarrowChange = () => {
+    calendar.setOption('headerToolbar', headerToolbar());
+    const view = fitView(calendar.view.type);
+    if (view !== calendar.view.type) calendar.changeView(view);
+  };
+  NARROW.addEventListener('change', onNarrowChange);
+
+  // A calendar laid out while its tab was hidden has no size yet.
+  bindPaneTabs(root, 'calendar', { onShow: (pane) => pane === 'calendar' && calendar.updateSize() });
+
   calendar.render();
   await loadOpenTasks();
 
@@ -319,6 +365,7 @@ export async function mount(root) {
       await Promise.all([loadSummary(), loadOpenTasks()]);
     },
     destroy() {
+      NARROW.removeEventListener('change', onNarrowChange);
       clearInterval(ticker);
       draggable.destroy();
       calendar.destroy();

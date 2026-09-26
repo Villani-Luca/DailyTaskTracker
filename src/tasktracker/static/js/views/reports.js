@@ -2,6 +2,7 @@
 
 import { api } from '../api.js';
 import { kpiHTML } from '../components/kpi.js';
+import { bindPaneTabs, paneTabsHTML } from '../components/panes.js';
 import { openTaskDrawer } from '../components/taskDrawer.js';
 import { timeBarsHTML } from '../components/timeBars.js';
 import { folderName, store } from '../store.js';
@@ -142,13 +143,13 @@ function reportHTML(report) {
   const perDay = Math.round(report.tracked_minutes / report.days.length);
   const byFolder = !state.project; // one project: its folder bar would only repeat the totals
   return `
-    <div class="kpi-row">
-      ${kpiHTML('Time spent', fmtMinutes(report.tracked_minutes))}
-      ${kpiHTML('Planned', fmtMinutes(report.planned_minutes))}
-      ${kpiHTML('Tasks completed', String(report.completed_tasks))}
-      ${chart ? kpiHTML('Spent per day, on average', fmtMinutes(perDay)) : ''}
-    </div>
-    <div class="report-grid${chart && byFolder ? '' : ' is-single'}">
+    <div class="pane report-summary" data-pane="summary">
+      <div class="kpi-row">
+        ${kpiHTML('Time spent', fmtMinutes(report.tracked_minutes))}
+        ${kpiHTML('Planned', fmtMinutes(report.planned_minutes))}
+        ${kpiHTML('Tasks completed', String(report.completed_tasks))}
+        ${chart ? kpiHTML('Spent per day, on average', fmtMinutes(perDay)) : ''}
+      </div>
       ${
         chart
           ? `<section class="card">
@@ -166,9 +167,9 @@ function reportHTML(report) {
           : ''
       }
     </div>
-    <section class="card">
+    <section class="card slot pane report-tasks" data-pane="tasks">
       <header class="card-header"><h2>By task</h2><span class="count">${report.tasks.length}</span></header>
-      ${tasksHTML(report.tasks)}
+      <div class="slot-body">${tasksHTML(report.tasks)}</div>
     </section>`;
 }
 
@@ -186,14 +187,17 @@ export async function mount(root) {
       <input type="date" name="to" aria-label="To" required>
       <select name="project" aria-label="Project"></select>
       <span class="spacer"></span>
-      <a class="btn" data-export download title="Download this report, with every calendar block, as an Excel file">
-        ${icons.download}Export to Excel</a>
+      <a class="btn" data-export download aria-label="Export to Excel"
+        title="Download this report, with every calendar block, as an Excel file">
+        ${icons.download}<span class="btn-label">Export to Excel</span></a>
     </form>
-    <div class="report" data-report></div>`;
+    ${paneTabsHTML([['summary', 'Summary'], ['tasks', 'By task']])}
+    <div class="report panes" data-report></div>`;
 
   const form = root.querySelector('.range-bar');
   const content = root.querySelector('[data-report]');
   const exportLink = form.querySelector('[data-export]');
+  const tabs = bindPaneTabs(root, 'reports');
   let loading = 0;
 
   // Folders can be added, renamed or deleted elsewhere: rebuild the list on every load.
@@ -207,6 +211,7 @@ export async function mount(root) {
   };
 
   const syncForm = () => {
+    form.classList.toggle('is-custom', state.preset === 'custom'); // phones show the dates only then
     form.elements.preset.value = state.preset;
     form.elements.from.value = state.from;
     form.elements.to.value = state.to;
@@ -226,7 +231,11 @@ export async function mount(root) {
     exportLink.href = api.timeReportXlsxUrl(start, end, projectFilter());
     try {
       const report = await api.timeReport(start, end, projectFilter());
-      if (token === loading) content.innerHTML = reportHTML(report);
+      if (token === loading) {
+        content.innerHTML = reportHTML(report);
+        tabs.apply();
+        tabs.setCounts({ tasks: report.tasks.length || null });
+      }
     } catch (err) {
       showError(err);
     } finally {

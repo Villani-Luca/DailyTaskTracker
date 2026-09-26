@@ -37,7 +37,7 @@ export async function mount(root) {
       </div>
       ${
         stats.length
-          ? `<div class="projects-grid">${stats.map(cardHTML).join('')}</div>`
+          ? `<div class="projects-grid scroll-area">${stats.map(cardHTML).join('')}</div>`
           : '<div class="card empty-state"><p>No folders yet. Create one to group your tasks, like Work, Home or a side project.</p></div>'
       }`;
   };
