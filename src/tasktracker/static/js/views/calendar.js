@@ -34,6 +34,22 @@ function fitView(view) {
   return view === 'timeGrid3Day' ? 'timeGridWeek' : view;
 }
 
+const nowMinutes = () => new Date().getHours() * 60 + new Date().getMinutes();
+const asTime = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}:00`;
+
+/**
+ * The scrollTime that puts the current time in the middle of the time grid in `root`,
+ * or null while there is no grid to measure (month or list view, or a hidden tab).
+ * Before the first measurement the grid opens an hour before now.
+ */
+function centeredScrollTime(root) {
+  const slots = root.querySelector('.fc-timegrid-slots'); // the whole day, 00:00 to 24:00
+  const scroller = slots?.closest('.fc-scroller');
+  if (!scroller?.clientHeight) return null;
+  const halfView = (scroller.clientHeight / 2) * (1440 / slots.offsetHeight);
+  return asTime(Math.max(0, Math.round(nowMinutes() - halfView)));
+}
+
 function headerToolbar() {
   const views = `dayGridMonth,${fitView('timeGridWeek')},timeGridDay,listWeek`;
   // On a phone the chunks stack (see app.css): arrows around the title, then the rest.
@@ -231,7 +247,10 @@ export async function mount(root) {
     firstDay: 1,
     height: '100%',
     nowIndicator: true,
-    scrollTime: '07:30:00',
+    // The axis end of the current-time line shows the time (styled in app.css).
+    nowIndicatorContent: (arg) => (arg.isAxis ? arg.date.toLocaleTimeString(undefined, TIME_FORMAT) : null),
+    scrollTime: asTime(Math.max(0, nowMinutes() - 60)),
+    scrollTimeReset: false, // centerOnNow() scrolls on each change of dates instead
     snapDuration: '00:15:00',
     allDayText: 'Tasks',
     dayMaxEvents: true,
@@ -273,6 +292,7 @@ export async function mount(root) {
       prefs.view = info.view.type;
       savePrefs(prefs);
       loadSummary().catch(showError);
+      requestAnimationFrame(centerOnNow);
     },
   });
 
@@ -350,8 +370,42 @@ export async function mount(root) {
   };
   NARROW.addEventListener('change', onNarrowChange);
 
-  // A calendar laid out while its tab was hidden has no size yet.
-  bindPaneTabs(root, 'calendar', { onShow: (pane) => pane === 'calendar' && calendar.updateSize() });
+  // Keep the current time in the middle of the time grid, on every change of dates or
+  // view (FullCalendar's own reset to scrollTime is off: it came a frame too late).
+  function centerOnNow() {
+    watchGridHeight();
+    const time = centeredScrollTime(root);
+    if (time) calendar.scrollToTime(time);
+  }
+
+  // When the time grid's height changes, keep what is in its middle there: the day's
+  // tasks fill the all-day row above it after it is drawn, and windows get resized.
+  let grid = null;
+  let gridHeight = 0;
+  const keepMiddle = new ResizeObserver(() => {
+    const height = grid.clientHeight;
+    if (gridHeight && height) grid.scrollTop += (gridHeight - height) / 2;
+    gridHeight = height; // 0 while its tab is hidden: showing it centers again anyway
+  });
+  function watchGridHeight() {
+    const scroller = root.querySelector('.fc-timegrid-slots')?.closest('.fc-scroller') ?? null;
+    if (scroller !== grid) {
+      if (grid) keepMiddle.unobserve(grid);
+      if (scroller) keepMiddle.observe(scroller);
+      grid = scroller;
+    }
+    gridHeight = scroller?.clientHeight ?? 0; // the height centerOnNow() centers for
+  }
+
+  // A calendar laid out while its tab was hidden has no size yet, and a hidden tab loses
+  // its scroll position: bring the current time back into view.
+  bindPaneTabs(root, 'calendar', {
+    onShow(pane) {
+      if (pane !== 'calendar') return;
+      calendar.updateSize();
+      centerOnNow();
+    },
+  });
 
   calendar.render();
   await loadOpenTasks();
@@ -366,6 +420,7 @@ export async function mount(root) {
     },
     destroy() {
       NARROW.removeEventListener('change', onNarrowChange);
+      keepMiddle.disconnect();
       clearInterval(ticker);
       draggable.destroy();
       calendar.destroy();

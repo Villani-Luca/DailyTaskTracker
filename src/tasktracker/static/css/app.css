@@ -955,6 +955,35 @@ dialog.import-dialog { width: min(640px, calc(100vw - 32px)); }
 .fc .ev-daytask .fc-event-main { color: var(--text); font-weight: 500; }
 .fc .ev-daytask.is-done .fc-event-title { color: var(--muted); text-decoration: line-through; }
 .fc .ev-running { animation: pulse 1.6s ease-in-out infinite; }
+
+/* Current time: a 2px line with a dot across today, and the time on the hour axis. */
+.fc .fc-timegrid-now-indicator-line { z-index: 5; border-top-width: 2px; }
+.fc .fc-timegrid-now-indicator-line::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: -6px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--fc-now-indicator-color);
+}
+.fc .fc-timegrid-now-indicator-arrow {
+  left: 2px;
+  right: 2px;
+  z-index: 5;
+  height: 18px;
+  margin-top: -9px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--fc-now-indicator-color);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 .fc .fc-event-main { padding: 2px 5px; }
 .fc .fc-event-time { font-size: 11px; font-weight: 500; opacity: 0.85; }
 .fc .fc-event-title { font-weight: 500; }
