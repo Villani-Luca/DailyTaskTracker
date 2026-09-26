@@ -6,10 +6,11 @@
 import { api } from '../api.js';
 import { openBlockDialog } from '../components/blockDialog.js';
 import { openTaskDrawer } from '../components/taskDrawer.js';
+import { timeBarsHTML } from '../components/timeBars.js';
 import { folderName, notifyChange } from '../store.js';
 import {
-  addDays, addMinutes, dateISO, esc, fmtDay, fmtMinutes, icons, inkOn, relDay, setPageTitle,
-  showError, toLocalISO, toast,
+  addDays, addMinutes, dateISO, describeRecurrence, esc, fmtDay, fmtMinutes, icons, inkOn, relDay,
+  setPageTitle, showError, toLocalISO, toast,
 } from '../util.js';
 
 const PREFS_KEY = 'tasktracker.calendar';
@@ -126,7 +127,8 @@ export async function mount(root) {
     info.el.style.setProperty('--ev-ink', inkOn(color));
     if (type === 'block') {
       const kind = block.is_running ? 'Running timer' : block.kind === 'tracked' ? 'Time spent' : 'Planned';
-      info.el.title = `${block.display_title}\n${kind} · ${folderName(block.effective_folder_id)} · ${fmtMinutes(block.duration_minutes)}`;
+      const repeats = block.recurrence && block.kind === 'planned' ? `\n${describeRecurrence(block.recurrence, block.starts_at)}` : '';
+      info.el.title = `${block.display_title}\n${kind} · ${folderName(block.effective_folder_id)} · ${fmtMinutes(block.duration_minutes)}${repeats}`;
     } else if (type === 'task') {
       info.el.title = `${task.title}\nPlanned for the day · ${folderName(task.folder_id)}`;
     }
@@ -251,33 +253,14 @@ export async function mount(root) {
   async function loadSummary() {
     if (!range) return;
     const report = await api.timeReport(toLocalISO(range.start), toLocalISO(range.end));
-    const max = Math.max(1, ...report.folders.flatMap((f) => [f.tracked_minutes, f.planned_minutes]));
-    const width = (m) => `${(m / max) * 100}%`;
     summaryEl.innerHTML = `
       <h3>Time this ${VIEW_NOUN[range.view.type] ?? 'period'}</h3>
       <div class="summary-totals">
         <div><span class="label">Spent</span><strong>${fmtMinutes(report.tracked_minutes)}</strong></div>
         <div><span class="label">Planned</span><strong>${fmtMinutes(report.planned_minutes)}</strong></div>
       </div>
-      ${
-        report.folders.length
-          ? `<ul class="time-bars">${report.folders
-              .map(
-                (f) => `<li style="--c:${f.color}">
-                  <div class="tb-head">
-                    <i class="dot"></i><span class="tb-name">${esc(f.name)}</span>
-                    <span class="tb-values">${fmtMinutes(f.tracked_minutes)}<span class="muted"> / ${fmtMinutes(f.planned_minutes)}</span></span>
-                  </div>
-                  <div class="tb-track"><span class="tb-bar tracked" style="width:${width(f.tracked_minutes)}" tabindex="0"
-                    data-tip-value="${fmtMinutes(f.tracked_minutes)} spent" data-tip-label="${esc(f.name)}"></span></div>
-                  <div class="tb-track"><span class="tb-bar planned" style="width:${width(f.planned_minutes)}" tabindex="0"
-                    data-tip-value="${fmtMinutes(f.planned_minutes)} planned" data-tip-label="${esc(f.name)}"></span></div>
-                </li>`,
-              )
-              .join('')}</ul>
-            <p class="hint"><span class="legend-swatch tracked"></span>spent <span class="legend-swatch planned"></span>planned</p>`
-          : '<p class="empty">Nothing on the calendar in this range yet.</p>'
-      }`;
+      ${timeBarsHTML(report.folders)}
+      <p class="hint"><a href="#/reports">Open reports</a> for any range of dates.</p>`;
   }
 
   function renderDragList() {

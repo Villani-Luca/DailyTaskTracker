@@ -190,6 +190,8 @@ def test_users_only_see_their_own_records(client, bob, alice_data):
         ("DELETE", "/api/comments/{comment}", None),
         ("PATCH", "/api/blocks/{block}", lambda ids: {"title": "Mine now"}),
         ("DELETE", "/api/blocks/{meeting}", None),
+        ("PATCH", "/api/blocks/{block}?scope=following", lambda ids: {"title": "Mine now"}),
+        ("DELETE", "/api/blocks/{meeting}?scope=all", None),
         ("POST", "/api/tasks", lambda ids: {"title": "x", "folder_id": ids["folder"]}),
         ("POST", "/api/blocks", lambda ids: {**SLOT, "task_id": ids["task"]}),
         ("POST", "/api/blocks", lambda ids: {**SLOT, "title": "x", "folder_id": ids["folder"]}),

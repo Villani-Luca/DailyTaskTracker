@@ -19,7 +19,12 @@ see how much time you actually spend on them.
   - Tasks planned for a day show in the *Tasks* row; drag one into a time slot to schedule it.
   - Drag open tasks from the side panel onto the grid; drag and resize blocks to move them.
   - *Mark as spent* turns a planned block into tracked time.
+  - **Repeating events**: daily, weekly on the days you pick, or monthly, every N days,
+    weeks or months, until a date. Change one event, or this and the following ones;
+    delete one, the following ones, or all. Dragging on the grid moves one event only.
   - The side panel totals time spent and planned per folder for the visible range.
+- **Reports**: pick any range (this week, last month, a custom one...) and see the time
+  spent and planned per day, per folder and per task, and how many tasks were completed.
 - **Timer**: press ▶ on a task to start tracking; the running timer sits in the top bar.
 - **Accounts**: log in with a username and password; everyone sees only their own
   folders, tasks and calendar. Accounts are created by hand (there is no sign-up).
@@ -114,7 +119,8 @@ The project is ready for [Vercel](https://vercel.com/docs/frameworks/backend/fas
 
 ```
 src/tasktracker/
-  models.py       SQLAlchemy models: User, LoginSession, Folder, Task, Comment, TimeBlock
+  models.py       SQLAlchemy models: User, LoginSession, Folder, Task, Comment, TimeBlock,
+                  Recurrence
   schemas.py      Pydantic models for everything in and out of the API
   services/       business rules (auth, folders, tasks, calendar, reports)
   api/            thin FastAPI routers over the services, under /api
@@ -136,6 +142,12 @@ Design decisions worth knowing:
 - **One calendar table.** A `TimeBlock` is either `planned` or `tracked`, and is linked to
   a task or stands alone as an appointment with its own title and folder. A running
   timer is a tracked block with no end yet. Planned vs. spent time is a sum over blocks.
+- **A repeating event is a series of ordinary blocks.** Each event is its own
+  `TimeBlock`, linked to a `Recurrence` that holds the rule, so every event can be moved,
+  marked as spent or deleted alone, and reports need nothing special. Changing "this and
+  the following events" splits the series and makes the later events again from the
+  changed one. Series changes and deletes only touch *planned* events: time already
+  spent is history. A series has at most 500 events.
 - **Business rules live in `services/`**, not in the routes:
   - Placing a task on the calendar plans it for that day, unless you picked a different
     date yourself. The planned date then follows the block when you drag it.

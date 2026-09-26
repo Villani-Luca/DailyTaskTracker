@@ -1,16 +1,28 @@
-"""Calendar blocks (planned time, tracked time, appointments) and the task timer."""
+"""Calendar blocks (planned time, tracked time, appointments), repeating series and the
+task timer."""
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from collections.abc import Collection
+from datetime import date, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import Select, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from tasktracker.models import BlockKind, Task, TaskStatus, TimeBlock, now
-from tasktracker.schemas import TimeBlockCreate, TimeBlockUpdate
+from tasktracker.models import (
+    BlockKind,
+    Frequency,
+    Recurrence,
+    Task,
+    TaskStatus,
+    TimeBlock,
+    now,
+)
+from tasktracker.schemas import RecurrenceRule, SeriesScope, TimeBlockCreate, TimeBlockUpdate
 from tasktracker.services.errors import InvalidOperationError, NotFoundError
 from tasktracker.services.folders import get_folder
+from tasktracker.services.recurrence import occurrences
 from tasktracker.services.tasks import get_task, set_status
 
 
@@ -21,6 +33,7 @@ def _block_query(user_id: int) -> Select[tuple[TimeBlock]]:
         .options(
             selectinload(TimeBlock.task).selectinload(Task.folder),
             selectinload(TimeBlock.folder),
+            selectinload(TimeBlock.recurrence),
         )
     )
 
@@ -54,7 +67,8 @@ def get_block(session: Session, user_id: int, block_id: int) -> TimeBlock:
 
 
 def create_block(session: Session, user_id: int, data: TimeBlockCreate) -> TimeBlock:
-    block = TimeBlock(user_id=user_id, **data.model_dump(exclude={"task_id"}))
+    """Add a block. With a recurrence, it is the first event of a new series."""
+    block = TimeBlock(user_id=user_id, **data.model_dump(exclude={"task_id", "recurrence"}))
     if data.task_id is not None:
         block.task = get_task(session, user_id, data.task_id)
         block.folder_id = None  # task blocks are colored by the task's folder
@@ -64,13 +78,73 @@ def create_block(session: Session, user_id: int, data: TimeBlockCreate) -> TimeB
     if block.task is not None and block.kind is BlockKind.PLANNED:
         _follow_plan(block.task, old_day=None, new_day=block.starts_at.date())
     session.add(block)
+    if data.recurrence is not None:
+        _repeat(session, block, data.recurrence)
     session.commit()
     return block
 
 
-def update_block(session: Session, user_id: int, block_id: int, data: TimeBlockUpdate) -> TimeBlock:
+def update_block(
+    session: Session,
+    user_id: int,
+    block_id: int,
+    data: TimeBlockUpdate,
+    scope: SeriesScope = SeriesScope.THIS,
+) -> TimeBlock:
+    """Change a block, or a block and the planned events after it in its series.
+
+    ``FOLLOWING`` splits the series: this block starts a new one with the changes (and
+    the new recurrence, if given), and the events after it are made again from it.
+    Setting the recurrence to None there stops the series after this block.
+    """
+    if scope is SeriesScope.ALL:
+        raise InvalidOperationError("Change this event, or this and the following events")
     block = get_block(session, user_id, block_id)
     changes = data.changes()
+    new_rule = "recurrence" in changes
+    changes.pop("recurrence", None)
+    series = block.recurrence
+
+    if series is not None and scope is SeriesScope.FOLLOWING:
+        rule = data.recurrence if new_rule else _rule_of(series)
+        _prune_series(session, series, block, following=True)
+        _apply_changes(session, user_id, block, changes)
+        if rule is not None:
+            _repeat(session, block, rule)
+    else:
+        if new_rule and series is not None:
+            raise InvalidOperationError(
+                "To change how events repeat, apply it to this and the following events"
+            )
+        _apply_changes(session, user_id, block, changes)
+        if data.recurrence is not None:
+            _repeat(session, block, data.recurrence)
+    session.commit()
+    return block
+
+
+def delete_block(
+    session: Session, user_id: int, block_id: int, scope: SeriesScope = SeriesScope.THIS
+) -> None:
+    """Delete a block, or with a scope, planned events of its series too.
+
+    Time already marked as spent is history: series deletes leave it alone.
+    """
+    block = get_block(session, user_id, block_id)
+    series = block.recurrence
+    if series is None or scope is SeriesScope.THIS:
+        session.delete(block)
+        if series is not None:
+            _drop_if_empty(session, series, gone={block})
+    else:
+        _prune_series(session, series, block, following=scope is SeriesScope.FOLLOWING)
+        session.delete(block)
+    session.commit()
+
+
+def _apply_changes(
+    session: Session, user_id: int, block: TimeBlock, changes: dict[str, Any]
+) -> None:
     old_day = block.starts_at.date()
 
     if block.is_running and changes.get("kind", block.kind) is not block.kind:
@@ -92,13 +166,6 @@ def update_block(session: Session, user_id: int, block_id: int, data: TimeBlockU
 
     if block.task is not None and block.kind is BlockKind.PLANNED:
         _follow_plan(block.task, old_day=old_day, new_day=block.starts_at.date())
-    session.commit()
-    return block
-
-
-def delete_block(session: Session, user_id: int, block_id: int) -> None:
-    session.delete(get_block(session, user_id, block_id))
-    session.commit()
 
 
 def _follow_plan(task: Task, old_day: date | None, new_day: date) -> None:
@@ -109,6 +176,77 @@ def _follow_plan(task: Task, old_day: date | None, new_day: date) -> None:
     """
     if task.planned_date is None or task.planned_date == old_day:
         task.planned_date = new_day
+
+
+# --- Repeating series ----------------------------------------------------------------
+
+
+def _repeat(session: Session, block: TimeBlock, rule: RecurrenceRule) -> None:
+    """Make ``block`` the first event of a new series, and add the events after it."""
+    if block.kind is not BlockKind.PLANNED:
+        raise InvalidOperationError("Only planned blocks can repeat")
+    assert block.ends_at is not None  # only a running timer has no end
+    weekdays = []
+    if rule.frequency is Frequency.WEEKLY:
+        weekdays = sorted(set(rule.weekdays) or {block.starts_at.weekday()})
+    starts = occurrences(block.starts_at, rule.frequency, rule.interval, weekdays, rule.until)
+
+    series = Recurrence(
+        user_id=block.user_id,
+        frequency=rule.frequency,
+        interval=rule.interval,
+        weekdays=weekdays,
+        until=rule.until,
+    )
+    block.recurrence = series
+    duration = block.ends_at - block.starts_at
+    for start in starts[1:]:
+        session.add(
+            TimeBlock(
+                user_id=block.user_id,
+                kind=BlockKind.PLANNED,
+                task=block.task,
+                folder_id=block.folder_id,
+                title=block.title,
+                notes=block.notes,
+                starts_at=start,
+                ends_at=start + duration,
+                recurrence=series,
+            )
+        )
+
+
+def _rule_of(series: Recurrence) -> RecurrenceRule:
+    return RecurrenceRule(
+        frequency=series.frequency,
+        interval=series.interval,
+        weekdays=series.weekdays,
+        until=series.until,
+    )
+
+
+def _prune_series(session: Session, series: Recurrence, block: TimeBlock, following: bool) -> None:
+    """Take ``block`` out of its series, deleting the series' planned events after it
+    (``following``) or all of them. The series then ends before ``block``."""
+    gone = {
+        other
+        for other in series.blocks
+        if other is not block
+        and other.kind is BlockKind.PLANNED
+        and (not following or other.starts_at > block.starts_at)
+    }
+    for other in gone:
+        session.delete(other)
+    block.recurrence = None
+    if not _drop_if_empty(session, series, gone):
+        series.until = min(series.until, block.starts_at.date() - timedelta(days=1))
+
+
+def _drop_if_empty(session: Session, series: Recurrence, gone: Collection[TimeBlock]) -> bool:
+    if any(b not in gone for b in series.blocks):
+        return False
+    session.delete(series)
+    return True
 
 
 # --- Timer ---------------------------------------------------------------------------

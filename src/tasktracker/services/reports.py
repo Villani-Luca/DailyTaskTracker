@@ -3,26 +3,31 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Hashable, Iterator
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from tasktracker.models import INBOX_COLOR, BlockKind, Task, TaskStatus, TimeBlock, now
 from tasktracker.schemas import (
     DayPlan,
+    DayTime,
     FolderStats,
     FolderTime,
     Overview,
     StatusCount,
     TaskRead,
+    TaskTime,
     TimeBlockRead,
     TimeReport,
 )
 from tasktracker.services import calendar, tasks
+from tasktracker.services.errors import InvalidOperationError
 from tasktracker.services.folders import list_folders
 
 INBOX_NAME = "Inbox"
+MAX_REPORT_DAYS = 731  # two years
 
 
 def build_overview(session: Session, user_id: int, today: date, days_ahead: int = 6) -> Overview:
@@ -134,56 +139,108 @@ def folder_stats(session: Session, user_id: int, today: date) -> list[FolderStat
 def time_report(
     session: Session, user_id: int, starts_at: datetime, ends_at: datetime
 ) -> TimeReport:
-    """Planned vs. tracked minutes per folder, clipped to ``[starts_at, ends_at)``."""
-    minutes = _minutes_by_folder(session, user_id, starts_at, ends_at)
+    """Planned vs. tracked minutes in ``[starts_at, ends_at)`` per folder, per task (or
+    appointment) and per day, and how many tasks were completed in that time.
+
+    Blocks are clipped to the range, and split at midnight between days.
+    """
+    if ends_at <= starts_at:
+        raise InvalidOperationError("The end of the range must be after its start")
+    first_day, last_day = starts_at.date(), (ends_at - timedelta(microseconds=1)).date()
+    day_count = (last_day - first_day).days + 1
+    if day_count > MAX_REPORT_DAYS:
+        raise InvalidOperationError("Pick a range of at most two years")
+
+    by_folder: dict[int | None, Counter[BlockKind]] = defaultdict(Counter)
+    by_item: dict[Hashable, Counter[BlockKind]] = defaultdict(Counter)
+    by_day: dict[date, Counter[BlockKind]] = {
+        first_day + timedelta(days=i): Counter() for i in range(day_count)
+    }
+    items: dict[Hashable, TimeBlock] = {}  # the first block seen for each task/appointment
+    current = now()
+    for block in calendar.list_blocks(session, user_id, starts_at, ends_at):
+        key = block.task_id or ("appointment", block.display_title, block.effective_folder_id)
+        items.setdefault(key, block)
+        start, end = max(block.starts_at, starts_at), min(block.ends_at or current, ends_at)
+        for day, seconds in _split_by_day(start, end):
+            by_folder[block.effective_folder_id][block.kind] += seconds
+            by_item[key][block.kind] += seconds
+            by_day[day][block.kind] += seconds
+
     folders = {f.id: f for f in list_folders(session, user_id)}
-    rows = []
-    for folder_id, by_kind in minutes.items():
+    folder_rows = []
+    for folder_id, seconds in by_folder.items():
         folder = folders.get(folder_id) if folder_id is not None else None
-        rows.append(
+        folder_rows.append(
             FolderTime(
                 folder_id=folder_id,
                 name=folder.name if folder else INBOX_NAME,
                 color=folder.color if folder else INBOX_COLOR,
-                planned_minutes=by_kind.get(BlockKind.PLANNED, 0),
-                tracked_minutes=by_kind.get(BlockKind.TRACKED, 0),
+                **_minutes(seconds),
             )
         )
-    rows.sort(key=lambda r: (-r.tracked_minutes, -r.planned_minutes, r.name.lower()))
+    folder_rows.sort(key=lambda r: (-r.tracked_minutes, -r.planned_minutes, r.name.lower()))
+
+    task_rows = [
+        TaskTime(
+            task_id=block.task_id,
+            title=block.task.title if block.task else block.display_title,
+            folder_id=block.effective_folder_id,
+            color=block.color,
+            status=block.task.status if block.task else None,
+            **_minutes(by_item[key]),
+        )
+        for key, block in items.items()
+    ]
+    task_rows = [r for r in task_rows if r.planned_minutes or r.tracked_minutes]
+    task_rows.sort(key=lambda r: (-r.tracked_minutes, -r.planned_minutes, r.title.lower()))
+
+    completed = session.scalar(
+        select(func.count(Task.id)).where(
+            Task.user_id == user_id, Task.completed_at >= starts_at, Task.completed_at < ends_at
+        )
+    )
     return TimeReport(
         starts_at=starts_at,
         ends_at=ends_at,
-        folders=rows,
-        planned_minutes=sum(r.planned_minutes for r in rows),
-        tracked_minutes=sum(r.tracked_minutes for r in rows),
+        folders=folder_rows,
+        tasks=task_rows,
+        days=[DayTime(day=day, **_minutes(seconds)) for day, seconds in by_day.items()],
+        planned_minutes=sum(r.planned_minutes for r in folder_rows),
+        tracked_minutes=sum(r.tracked_minutes for r in folder_rows),
+        completed_tasks=completed or 0,
     )
 
 
-def _minutes_by_folder(
-    session: Session,
-    user_id: int,
-    starts_at: datetime | None = None,
-    ends_at: datetime | None = None,
-) -> dict[int | None, dict[BlockKind, int]]:
+def _split_by_day(start: datetime, end: datetime) -> Iterator[tuple[date, float]]:
+    """The seconds of ``[start, end)`` on each day it touches."""
+    while start < end:
+        stop = min(end, datetime.combine(start.date() + timedelta(days=1), time.min))
+        yield start.date(), (stop - start).total_seconds()
+        start = stop
+
+
+def _minutes(seconds: Counter[BlockKind]) -> dict[str, int]:
+    return {
+        "planned_minutes": round(seconds[BlockKind.PLANNED] / 60),
+        "tracked_minutes": round(seconds[BlockKind.TRACKED] / 60),
+    }
+
+
+def _minutes_by_folder(session: Session, user_id: int) -> dict[int | None, dict[BlockKind, int]]:
+    """All-time planned and tracked minutes per folder (None: the inbox)."""
     folder_id = func.coalesce(Task.folder_id, TimeBlock.folder_id)
     stmt = (
         select(folder_id, TimeBlock.kind, TimeBlock.starts_at, TimeBlock.ends_at)
         .outerjoin(Task, TimeBlock.task_id == Task.id)
         .where(TimeBlock.user_id == user_id)
     )
-    if starts_at is not None:
-        stmt = stmt.where(or_(TimeBlock.ends_at.is_(None), TimeBlock.ends_at > starts_at))
-    if ends_at is not None:
-        stmt = stmt.where(TimeBlock.starts_at < ends_at)
-
     current = now()
     seconds: dict[int | None, dict[BlockKind, float]] = defaultdict(lambda: defaultdict(float))
     for fid, kind, block_start, block_end in session.execute(stmt):
-        start = max(block_start, starts_at) if starts_at else block_start
         end = block_end or current
-        end = min(end, ends_at) if ends_at else end
-        if end > start:
-            seconds[fid][kind] += (end - start).total_seconds()
+        if end > block_start:
+            seconds[fid][kind] += (end - block_start).total_seconds()
     return {
         fid: {kind: round(total / 60) for kind, total in by_kind.items()}
         for fid, by_kind in seconds.items()

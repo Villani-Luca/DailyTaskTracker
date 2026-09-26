@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from tasktracker.demo import seed_demo_data
 
@@ -101,3 +101,56 @@ def test_demo_data_seeds_once(app, client, user):
     assert set(stats) == {"Work", "Personal", "Learning"}
     overview = client.get("/api/overview", params={"today": "2026-09-25"}).json()
     assert overview["days"][0]["tasks"]
+
+
+def test_time_report_per_task_and_per_day(client, make_folder, make_task, make_block):
+    work = make_folder("Work", "#2a78d6")
+    slides = make_task("Slides", folder_id=work["id"])
+    review = make_task("Review", folder_id=work["id"])
+    make_block("2026-09-28T09:00", "2026-09-28T10:00", task_id=slides["id"], kind="tracked")
+    # Half an hour on each side of midnight.
+    make_block("2026-09-28T23:30", "2026-09-29T00:30", task_id=slides["id"], kind="tracked")
+    make_block("2026-09-29T14:00", "2026-09-29T14:45", task_id=review["id"], kind="tracked")
+    make_block("2026-09-29T16:00", "2026-09-29T17:00", title="Dentist")
+
+    report = client.get(
+        "/api/reports/time",
+        params={"starts_at": "2026-09-28T00:00", "ends_at": "2026-09-30T00:00"},
+    ).json()
+
+    assert report["tracked_minutes"] == 165
+    rows = [
+        (t["task_id"], t["title"], t["tracked_minutes"], t["planned_minutes"])
+        for t in report["tasks"]
+    ]
+    assert rows == [
+        (slides["id"], "Slides", 120, 0),
+        (review["id"], "Review", 45, 0),
+        (None, "Dentist", 0, 60),
+    ]
+    days = [(d["day"], d["tracked_minutes"], d["planned_minutes"]) for d in report["days"]]
+    assert days == [("2026-09-28", 90, 0), ("2026-09-29", 75, 60)]
+
+
+def test_time_report_counts_tasks_completed_in_the_range(client, make_task):
+    task = make_task()
+    make_task("still open")
+    done = client.patch(f"/api/tasks/{task['id']}", json={"status": "done"}).json()
+    completed_at = datetime.fromisoformat(done["completed_at"])
+
+    def completed(start, end):
+        params = {"starts_at": start.isoformat(), "ends_at": end.isoformat()}
+        return client.get("/api/reports/time", params=params).json()["completed_tasks"]
+
+    hour, day = timedelta(hours=1), timedelta(days=1)
+    assert completed(completed_at - hour, completed_at + hour) == 1
+    assert completed(completed_at - 2 * day, completed_at - day) == 0
+
+
+def test_time_report_range_must_make_sense(client):
+    def status(start, end):
+        params = {"starts_at": start, "ends_at": end}
+        return client.get("/api/reports/time", params=params).status_code
+
+    assert status("2026-09-28T00:00", "2026-09-28T00:00") == 422
+    assert status("2024-01-01T00:00", "2026-09-28T00:00") == 422  # more than two years

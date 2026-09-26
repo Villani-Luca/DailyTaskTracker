@@ -1,0 +1,231 @@
+// Reports: time spent and planned in any range of dates, per day, per folder and per task.
+
+import { api } from '../api.js';
+import { kpiHTML } from '../components/kpi.js';
+import { openTaskDrawer } from '../components/taskDrawer.js';
+import { timeBarsHTML } from '../components/timeBars.js';
+import { folderName } from '../store.js';
+import {
+  STATUS_LABEL, addDays, dateISO, esc, fmtDay, fmtMinutes, parseDay, setPageTitle, showError,
+  startOfWeek, toast, todayISO,
+} from '../util.js';
+
+const PRESETS = [
+  ['today', 'Today', (t) => [t, t]],
+  ['this-week', 'This week', (t) => [startOfWeek(t), addDays(startOfWeek(t), 6)]],
+  ['last-week', 'Last week', (t) => [addDays(startOfWeek(t), -7), addDays(startOfWeek(t), -1)]],
+  ['last-30', 'Last 30 days', (t) => [addDays(t, -29), t]],
+  ['this-month', 'This month', (t) => [new Date(t.getFullYear(), t.getMonth(), 1), new Date(t.getFullYear(), t.getMonth() + 1, 0)]],
+  ['last-month', 'Last month', (t) => [new Date(t.getFullYear(), t.getMonth() - 1, 1), new Date(t.getFullYear(), t.getMonth(), 0)]],
+  ['this-year', 'This year', (t) => [new Date(t.getFullYear(), 0, 1), new Date(t.getFullYear(), 11, 31)]],
+];
+const MAX_DAY_COLUMNS = 62; // past two months, the chart shows weeks
+const MAX_AXIS_LABELS = 8;
+const TICK_STEPS = [15, 30, 60, 120, 180, 240, 360, 480, 720, 1200, 1440, 2400, 3600, 6000];
+
+// The chosen range survives leaving the page and coming back.
+const state = { preset: 'this-week', from: null, to: null };
+
+function applyPreset() {
+  const preset = PRESETS.find(([key]) => key === state.preset);
+  if (!preset) return;
+  const [from, to] = preset[2](parseDay(todayISO()));
+  state.from = dateISO(from);
+  state.to = dateISO(to);
+}
+
+// --- Chart: time spent per day (or week), one series ---------------------------------
+
+function columns(days) {
+  if (days.length <= MAX_DAY_COLUMNS) {
+    return {
+      unit: 'day',
+      items: days.map((d) => ({
+        start: d.day,
+        label: fmtDay(d.day, { weekday: 'short', day: 'numeric' }),
+        name: fmtDay(d.day, { weekday: 'long', day: 'numeric', month: 'long' }),
+        tracked: d.tracked_minutes,
+        planned: d.planned_minutes,
+      })),
+    };
+  }
+  const weeks = new Map();
+  for (const d of days) {
+    const start = dateISO(startOfWeek(parseDay(d.day)));
+    const week = weeks.get(start) ?? { start, tracked: 0, planned: 0 };
+    week.tracked += d.tracked_minutes;
+    week.planned += d.planned_minutes;
+    weeks.set(start, week);
+  }
+  return {
+    unit: 'week',
+    items: [...weeks.values()].map((w) => ({
+      ...w,
+      label: fmtDay(w.start, { day: 'numeric', month: 'short' }),
+      name: `Week of ${fmtDay(w.start, { day: 'numeric', month: 'long' })}`,
+    })),
+  };
+}
+
+/** A clean top value and gridlines for a scale that must reach `max` minutes. */
+function scale(max) {
+  const step = TICK_STEPS.find((s) => max / s <= 4) ?? Math.ceil(max / 240) * 60;
+  const top = Math.max(step, Math.ceil(max / step) * step);
+  const ticks = [];
+  for (let v = 0; v <= top; v += step) ticks.push(v);
+  return { top, ticks };
+}
+
+function chartHTML({ unit, items }) {
+  const max = Math.max(...items.map((i) => i.tracked));
+  if (!max) return '<p class="empty">No time spent in this range.</p>';
+  const { top, ticks } = scale(max);
+  const every = Math.ceil(items.length / MAX_AXIS_LABELS);
+  const height = (m) => (m ? `max(2px, ${(m / top) * 100}%)` : '0');
+  return `
+    <div class="bar-chart" role="group" aria-label="${esc(`Time spent per ${unit}`)}">
+      <div class="bc-plot">
+        ${ticks.map((v) => `<div class="bc-gridline" style="bottom:${(v / top) * 100}%"><span class="bc-tick">${fmtMinutes(v)}</span></div>`).join('')}
+        <div class="bc-columns">${items
+          .map(
+            (i) => `<div class="bc-col" tabindex="0" data-tip-value="${fmtMinutes(i.tracked)} spent" data-tip-label="${esc(i.name)}"
+              aria-label="${esc(`${i.name}: ${fmtMinutes(i.tracked)} spent`)}"><span class="bc-bar" style="height:${height(i.tracked)}"></span></div>`,
+          )
+          .join('')}</div>
+      </div>
+      <div class="bc-axis" aria-hidden="true">${items
+        .map((i, n) => `<span>${n % every === 0 ? esc(i.label) : ''}</span>`)
+        .join('')}</div>
+    </div>
+    <details class="chart-table">
+      <summary>Show as table</summary>
+      <table class="report-table">
+        <thead><tr><th>${unit === 'day' ? 'Day' : 'Week'}</th><th class="num">Spent</th><th class="num">Planned</th></tr></thead>
+        <tbody>${items
+          .map((i) => `<tr><td>${esc(i.name)}</td><td class="num">${fmtMinutes(i.tracked)}</td><td class="num">${fmtMinutes(i.planned)}</td></tr>`)
+          .join('')}</tbody>
+      </table>
+    </details>`;
+}
+
+// --- Tables & page -------------------------------------------------------------------
+
+function tasksHTML(rows) {
+  if (!rows.length) return '<p class="empty">No time on tasks or appointments in this range.</p>';
+  return `<table class="report-table">
+    <thead><tr>
+      <th>Task</th><th class="hide-sm">Folder</th><th class="hide-sm">Status</th>
+      <th class="num">Spent</th><th class="num">Planned</th>
+    </tr></thead>
+    <tbody>${rows
+      .map(
+        (r) => `<tr${r.task_id ? ` class="is-link" data-task-id="${r.task_id}" tabindex="0"` : ''}>
+          <td><span class="rt-name"><i class="dot" style="--c:${r.color}"></i>${esc(r.title)}</span></td>
+          <td class="hide-sm">${esc(folderName(r.folder_id))}</td>
+          <td class="hide-sm">${r.status ? STATUS_LABEL[r.status] : '<span class="muted">Appointment</span>'}</td>
+          <td class="num">${fmtMinutes(r.tracked_minutes)}</td>
+          <td class="num muted">${fmtMinutes(r.planned_minutes)}</td>
+        </tr>`,
+      )
+      .join('')}</tbody>
+  </table>`;
+}
+
+function reportHTML(report) {
+  const chart = report.days.length > 1 ? columns(report.days) : null;
+  const perDay = Math.round(report.tracked_minutes / report.days.length);
+  return `
+    <div class="kpi-row">
+      ${kpiHTML('Time spent', fmtMinutes(report.tracked_minutes))}
+      ${kpiHTML('Planned', fmtMinutes(report.planned_minutes))}
+      ${kpiHTML('Tasks completed', String(report.completed_tasks))}
+      ${chart ? kpiHTML('Spent per day, on average', fmtMinutes(perDay)) : ''}
+    </div>
+    <div class="report-grid${chart ? '' : ' is-single'}">
+      ${
+        chart
+          ? `<section class="card">
+              <header class="card-header"><h2>Time spent per ${chart.unit}</h2></header>
+              ${chartHTML(chart)}
+            </section>`
+          : ''
+      }
+      <section class="card">
+        <header class="card-header"><h2>By folder</h2></header>
+        ${timeBarsHTML(report.folders, 'No time in this range.')}
+      </section>
+    </div>
+    <section class="card">
+      <header class="card-header"><h2>By task</h2><span class="count">${report.tasks.length}</span></header>
+      ${tasksHTML(report.tasks)}
+    </section>`;
+}
+
+export async function mount(root) {
+  setPageTitle('Reports');
+  if (state.preset !== 'custom' || !state.from) applyPreset();
+  root.innerHTML = `
+    <form class="range-bar" aria-label="Date range">
+      <select name="preset" aria-label="Range">
+        ${PRESETS.map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}
+        <option value="custom">Custom range</option>
+      </select>
+      <input type="date" name="from" aria-label="From" required>
+      <span class="muted" aria-hidden="true">–</span>
+      <input type="date" name="to" aria-label="To" required>
+    </form>
+    <div class="report" data-report></div>`;
+
+  const form = root.querySelector('.range-bar');
+  const content = root.querySelector('[data-report]');
+  let loading = 0;
+
+  const syncForm = () => {
+    form.elements.preset.value = state.preset;
+    form.elements.from.value = state.from;
+    form.elements.to.value = state.to;
+  };
+
+  async function load() {
+    if (state.to < state.from) {
+      toast('The range must end on or after its first day', 'error');
+      return;
+    }
+    const token = ++loading;
+    content.classList.add('is-loading'); // keep the old numbers on screen until the new ones arrive
+    try {
+      const end = dateISO(addDays(parseDay(state.to), 1));
+      const report = await api.timeReport(`${state.from}T00:00:00`, `${end}T00:00:00`);
+      if (token === loading) content.innerHTML = reportHTML(report);
+    } catch (err) {
+      showError(err);
+    } finally {
+      if (token === loading) content.classList.remove('is-loading');
+    }
+  }
+
+  form.addEventListener('change', (e) => {
+    if (e.target.name === 'preset') {
+      state.preset = e.target.value;
+      applyPreset();
+    } else {
+      state.preset = 'custom';
+      state.from = form.elements.from.value || state.from;
+      state.to = form.elements.to.value || state.to;
+    }
+    syncForm();
+    load();
+  });
+  form.addEventListener('submit', (e) => e.preventDefault());
+
+  const openRow = (e) => {
+    const row = e.target.closest('tr[data-task-id]');
+    if (row) openTaskDrawer(Number(row.dataset.taskId));
+  };
+  content.addEventListener('click', openRow);
+  content.addEventListener('keydown', (e) => e.key === 'Enter' && openRow(e));
+
+  syncForm();
+  await load();
+  return { refresh: load };
+}

@@ -75,8 +75,9 @@ export const api = {
   blocks: {
     list: (startsAt, endsAt) => request('GET', `/blocks${query({ starts_at: startsAt, ends_at: endsAt })}`),
     create: (data) => request('POST', '/blocks', data),
-    update: (id, data) => request('PATCH', `/blocks/${id}`, data),
-    remove: (id) => request('DELETE', `/blocks/${id}`),
+    // scope: for an event of a repeating series, 'this' (default), 'following' or 'all'
+    update: (id, data, scope) => request('PATCH', `/blocks/${id}${query({ scope })}`, data),
+    remove: (id, scope) => request('DELETE', `/blocks/${id}${query({ scope })}`),
   },
   timer: {
     get: () => request('GET', '/timer'),

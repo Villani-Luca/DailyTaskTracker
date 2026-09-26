@@ -13,7 +13,7 @@ from __future__ import annotations
 import enum
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import Enum, ForeignKey, String, Text, UniqueConstraint, func, select
+from sqlalchemy import JSON, Enum, ForeignKey, String, Text, UniqueConstraint, func, select
 from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
 from tasktracker.config import local_timezone
@@ -46,6 +46,12 @@ class Priority(enum.StrEnum):
 class BlockKind(enum.StrEnum):
     PLANNED = "planned"  # time you intend to spend: a task placed on the calendar, an appointment
     TRACKED = "tracked"  # time you actually spent: a timer, or time logged by hand
+
+
+class Frequency(enum.StrEnum):
+    DAILY = "daily"
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"  # on the same day of the month; months without that day are skipped
 
 
 def _enum_column(enum_cls: type[enum.Enum]) -> Enum:
@@ -170,6 +176,27 @@ Task.comment_count = column_property(
 )
 
 
+class Recurrence(Base):
+    """How a series of planned blocks repeats.
+
+    Every event of a series is a TimeBlock of its own, so each one can be moved, marked
+    as spent or deleted alone. The rule is kept to show it and to redo later events.
+    """
+
+    __tablename__ = "recurrences"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = _owner_column()
+    frequency: Mapped[Frequency] = mapped_column(_enum_column(Frequency))
+    interval: Mapped[int] = mapped_column(default=1)  # every `interval` days, weeks or months
+    weekdays: Mapped[list[int]] = mapped_column(JSON, default=list)  # weekly: Monday = 0
+    until: Mapped[date]  # the last day an event can fall on
+
+    blocks: Mapped[list[TimeBlock]] = relationship(
+        back_populates="recurrence", order_by="TimeBlock.starts_at"
+    )
+
+
 class TimeBlock(Base):
     """A span of time on the calendar.
 
@@ -190,9 +217,13 @@ class TimeBlock(Base):
     starts_at: Mapped[datetime] = mapped_column(index=True)
     ends_at: Mapped[datetime | None]
     notes: Mapped[str] = mapped_column(Text, default="")
+    recurrence_id: Mapped[int | None] = mapped_column(
+        ForeignKey("recurrences.id", ondelete="SET NULL"), index=True
+    )
 
     task: Mapped[Task | None] = relationship(back_populates="time_blocks")
     folder: Mapped[Folder | None] = relationship()
+    recurrence: Mapped[Recurrence | None] = relationship(back_populates="blocks")
 
     @property
     def effective_folder(self) -> Folder | None:

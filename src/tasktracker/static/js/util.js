@@ -54,6 +54,37 @@ export function addMinutes(date, minutes) {
   return new Date(date.getTime() + minutes * 60_000);
 }
 
+/** Same day `months` later, or that month's last day when it is shorter (31 Jan -> 28 Feb). */
+export function addMonths(date, months) {
+  const d = new Date(date);
+  const day = d.getDate();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + months);
+  d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
+  return d;
+}
+
+/** Monday of the week `date` falls in, at midnight (the calendar's weeks start on Monday). */
+export function startOfWeek(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return addDays(d, -((d.getDay() + 6) % 7));
+}
+
+/** Short weekday names in the browser's language, Monday first (the API's 0-6). */
+export const WEEKDAYS = Array.from({ length: 7 }, (_, i) =>
+  new Date(2024, 0, 1 + i).toLocaleDateString(undefined, { weekday: 'short' }),
+);
+
+/** "Every 2 weeks on Mon, Wed until 21 Oct 2026". `start` names the day of the month. */
+export function describeRecurrence(r, start = null) {
+  const [one, many] = { daily: ['day', 'days'], weekly: ['week', 'weeks'], monthly: ['month', 'months'] }[r.frequency];
+  let text = r.interval === 1 ? `Every ${one}` : `Every ${r.interval} ${many}`;
+  if (r.frequency === 'weekly') text += ` on ${r.weekdays.map((d) => WEEKDAYS[d]).join(', ')}`;
+  if (r.frequency === 'monthly' && start) text += ` on day ${new Date(start).getDate()}`;
+  return `${text} until ${fmtDay(r.until, { day: 'numeric', month: 'short', year: 'numeric' })}`;
+}
+
 export function fmtDay(iso, options = { weekday: 'short', day: 'numeric', month: 'short' }) {
   return parseDay(iso).toLocaleDateString(undefined, options);
 }
@@ -168,6 +199,7 @@ export const icons = {
   grip: svg('<circle cx="6" cy="4" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="12" r="1"/>', { fill: true }),
   folder: svg('<path d="M2 4.5a1 1 0 0 1 1-1h3.2l1.5 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/>'),
   sun: svg('<circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1"/>'),
+  repeat: svg('<path d="M3 7V6a2 2 0 0 1 2-2h7.5M10.5 2l2 2-2 2M13 9v1a2 2 0 0 1-2 2H3.5M5.5 14l-2-2 2-2"/>'),
 };
 
 export function setPageTitle(text, color = null) {

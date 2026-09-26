@@ -25,7 +25,7 @@ export async function openTaskDrawer(taskId) {
     state = { task, comments, blocks };
     render();
     drawerEl().hidden = false;
-    drawerEl().querySelector('.title-input').focus();
+    drawerEl().querySelector('.drawer-panel').focus();
   } catch (err) {
     showError(err);
   }
@@ -71,15 +71,26 @@ function render() {
   const folderOptions = [{ value: '', label: 'Inbox' }, ...store.folders.map((f) => ({ value: f.id, label: f.name }))];
   drawerEl().innerHTML = `
     <div class="drawer-backdrop" data-close></div>
-    <aside class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
-      <header class="drawer-header" style="--c:${task.color}">
-        <i class="dot" style="--c:${task.color}"></i>
-        <span class="drawer-kicker">${esc(folderName(task.folder_id))} · #${task.id}</span>
+    <aside class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabindex="-1">
+      <header class="drawer-header">
+        <div class="drawer-heading">
+          <span class="drawer-kicker">
+            <i class="dot" style="--c:${task.color}"></i>
+            <span data-kicker>${esc(folderName(task.folder_id))} · #${task.id}</span>
+          </span>
+          <div class="drawer-title-row" data-title-view>
+            <h2 id="drawer-title" class="drawer-title">${esc(task.title)}</h2>
+            <button class="icon-btn sm" data-action="edit-title" aria-label="Edit title" title="Edit title">${icons.edit}</button>
+          </div>
+          <div class="drawer-title-row" data-title-edit hidden>
+            <textarea class="title-input" rows="1" maxlength="200" aria-label="Title"></textarea>
+            <button class="icon-btn sm" data-action="save-title" aria-label="Save title" title="Save (Enter)">${icons.check}</button>
+            <button class="icon-btn sm" data-action="cancel-title" aria-label="Cancel" title="Cancel (Esc)">${icons.close}</button>
+          </div>
+        </div>
         <button class="icon-btn" data-close aria-label="Close">${icons.close}</button>
       </header>
       <div class="drawer-body">
-        <textarea id="drawer-title" class="title-input" data-field="title" rows="1" maxlength="200"
-          aria-label="Title">${esc(task.title)}</textarea>
         <div class="field-grid">
           <label>Status<select data-field="status">${options(STATUSES, task.status)}</select></label>
           <label>Priority<select data-field="priority">${options(PRIORITIES, task.priority)}</select></label>
@@ -103,7 +114,6 @@ function render() {
   renderTime();
   renderComments();
   bind();
-  autoGrow(drawerEl().querySelector('.title-input'));
 }
 
 function renderTime() {
@@ -187,6 +197,7 @@ function renderComments() {
 /** Update field values changed elsewhere, without touching the one being edited. */
 function syncFields() {
   const { task } = state;
+  drawerEl().querySelector('#drawer-title').textContent = task.title;
   const values = {
     status: task.status,
     priority: task.priority,
@@ -207,17 +218,40 @@ function autoGrow(textarea) {
 
 // --- Behaviour ---------------------------------------------------------------------
 
+// The title sits in the header; the edit button swaps it for a text box.
+function editTitle(editing) {
+  const header = drawerEl().querySelector('.drawer-header');
+  const input = header.querySelector('.title-input');
+  header.querySelector('[data-title-view]').hidden = editing;
+  header.querySelector('[data-title-edit]').hidden = !editing;
+  if (editing) {
+    input.value = state.task.title;
+    autoGrow(input);
+    input.focus();
+    input.select();
+  } else {
+    header.querySelector('[data-action="edit-title"]').focus();
+  }
+}
+
+async function saveTitle() {
+  const title = drawerEl().querySelector('.title-input').value.trim();
+  if (!title) {
+    toast('A task needs a title', 'error');
+    return;
+  }
+  if (title !== state.task.title) {
+    state.task = await api.tasks.update(state.task.id, { title });
+    drawerEl().querySelector('#drawer-title').textContent = state.task.title;
+    notifyChange();
+  }
+  editTitle(false);
+}
+
 async function saveField(input) {
   const field = input.dataset.field;
   let value = input.value;
-  if (field === 'title') {
-    value = value.trim();
-    if (!value) {
-      input.value = state.task.title;
-      toast('A task needs a title', 'error');
-      return;
-    }
-  } else if (field === 'planned_date' || field === 'due_date') {
+  if (field === 'planned_date' || field === 'due_date') {
     value = value || null;
   } else if (field === 'folder_id') {
     value = value ? Number(value) : null;
@@ -234,7 +268,7 @@ async function saveField(input) {
     if (field === 'folder_id') {
       const header = drawerEl().querySelector('.drawer-header');
       header.querySelector('.dot').style.setProperty('--c', state.task.color);
-      header.querySelector('.drawer-kicker').textContent = `${folderName(state.task.folder_id)} · #${state.task.id}`;
+      header.querySelector('[data-kicker]').textContent = `${folderName(state.task.folder_id)} · #${state.task.id}`;
     }
     renderTime();
     notifyChange();
@@ -245,7 +279,11 @@ async function saveField(input) {
 
 async function runAction(action, target) {
   const { task } = state;
-  if (action === 'start-timer') {
+  if (action === 'edit-title' || action === 'cancel-title') {
+    editTitle(action === 'edit-title');
+  } else if (action === 'save-title') {
+    await saveTitle();
+  } else if (action === 'start-timer') {
     await api.timer.start(task.id);
     notifyChange();
   } else if (action === 'stop-timer') {
@@ -304,9 +342,14 @@ function bind() {
     if (e.target.classList.contains('title-input')) autoGrow(e.target);
   });
   root.addEventListener('keydown', (e) => {
-    if (e.target.classList.contains('title-input') && e.key === 'Enter') {
-      e.preventDefault();
-      e.target.blur();
+    if (e.target.classList.contains('title-input')) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        saveTitle().catch(showError);
+      } else if (e.key === 'Escape') {
+        e.stopPropagation(); // cancel the edit, keep the drawer open
+        editTitle(false);
+      }
     }
     if (e.target.name === 'body' && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();

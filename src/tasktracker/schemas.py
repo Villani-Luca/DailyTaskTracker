@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import enum
 from datetime import date, datetime
 from typing import Annotated, Any, ClassVar
 
@@ -15,7 +16,7 @@ from pydantic import (
 )
 
 from tasktracker.config import local_timezone
-from tasktracker.models import BlockKind, Priority, TaskStatus
+from tasktracker.models import BlockKind, Frequency, Priority, TaskStatus
 
 HEX_COLOR = r"^#[0-9a-fA-F]{6}$"
 
@@ -160,6 +161,32 @@ class CommentRead(ReadModel):
 # --- Calendar ------------------------------------------------------------------------
 
 
+class RecurrenceRule(BaseModel):
+    """Repeat a planned block every ``interval`` days, weeks or months, up to ``until``."""
+
+    frequency: Frequency
+    interval: Annotated[int, Field(ge=1, le=99)] = 1
+    # Weekly only, Monday = 0. Empty means the weekday of the first event.
+    weekdays: Annotated[list[Annotated[int, Field(ge=0, le=6)]], Field(max_length=7)] = []
+    until: date
+
+
+class RecurrenceRead(ReadModel):
+    id: int
+    frequency: Frequency
+    interval: int
+    weekdays: list[int]
+    until: date
+
+
+class SeriesScope(enum.StrEnum):
+    """Which events of a repeating series a change or a delete applies to."""
+
+    THIS = "this"
+    FOLLOWING = "following"  # this event and the planned ones after it
+    ALL = "all"  # every planned event (delete only)
+
+
 class TimeBlockCreate(BaseModel):
     kind: BlockKind = BlockKind.PLANNED
     task_id: int | None = None
@@ -168,6 +195,7 @@ class TimeBlockCreate(BaseModel):
     starts_at: LocalDateTime
     ends_at: LocalDateTime
     notes: str = ""
+    recurrence: RecurrenceRule | None = None
 
     @model_validator(mode="after")
     def _check(self) -> TimeBlockCreate:
@@ -175,6 +203,8 @@ class TimeBlockCreate(BaseModel):
             raise ValueError("ends_at must be after starts_at")
         if self.task_id is None and not self.title:
             raise ValueError("an appointment needs a title (or link it to a task)")
+        if self.recurrence is not None and self.kind is not BlockKind.PLANNED:
+            raise ValueError("only planned blocks can repeat")
         return self
 
 
@@ -188,6 +218,7 @@ class TimeBlockUpdate(PatchModel):
     starts_at: LocalDateTime | None = None
     ends_at: LocalDateTime | None = None
     notes: str | None = None
+    recurrence: RecurrenceRule | None = None  # null: stop repeating after this event
 
 
 class TimeBlockRead(ReadModel):
@@ -204,6 +235,7 @@ class TimeBlockRead(ReadModel):
     notes: str
     duration_minutes: int
     is_running: bool
+    recurrence: RecurrenceRead | None
 
 
 class TimerStart(BaseModel):
@@ -257,9 +289,28 @@ class FolderTime(BaseModel):
     tracked_minutes: int
 
 
+class TaskTime(BaseModel):
+    task_id: int | None  # None: an appointment, time not linked to a task
+    title: str
+    folder_id: int | None
+    color: str
+    status: TaskStatus | None
+    planned_minutes: int
+    tracked_minutes: int
+
+
+class DayTime(BaseModel):
+    day: date
+    planned_minutes: int
+    tracked_minutes: int
+
+
 class TimeReport(BaseModel):
     starts_at: datetime
     ends_at: datetime
     folders: list[FolderTime]
+    tasks: list[TaskTime]
+    days: list[DayTime]
     planned_minutes: int
     tracked_minutes: int
+    completed_tasks: int  # tasks marked done in the range

@@ -4,6 +4,7 @@ from tasktracker.api.deps import CurrentUser, SessionDep
 from tasktracker.models import BlockKind
 from tasktracker.schemas import (
     LocalDateTime,
+    SeriesScope,
     TimeBlockCreate,
     TimeBlockRead,
     TimeBlockUpdate,
@@ -31,13 +32,22 @@ def create_block(data: TimeBlockCreate, session: SessionDep, user: CurrentUser):
 
 
 @router.patch("/blocks/{block_id}", response_model=TimeBlockRead)
-def update_block(block_id: int, data: TimeBlockUpdate, session: SessionDep, user: CurrentUser):
-    return calendar.update_block(session, user.id, block_id, data)
+def update_block(
+    block_id: int,
+    data: TimeBlockUpdate,
+    session: SessionDep,
+    user: CurrentUser,
+    scope: SeriesScope = SeriesScope.THIS,
+):
+    """For an event of a repeating series, ``scope=following`` also redoes the later ones."""
+    return calendar.update_block(session, user.id, block_id, data, scope)
 
 
 @router.delete("/blocks/{block_id}", status_code=204)
-def delete_block(block_id: int, session: SessionDep, user: CurrentUser) -> Response:
-    calendar.delete_block(session, user.id, block_id)
+def delete_block(
+    block_id: int, session: SessionDep, user: CurrentUser, scope: SeriesScope = SeriesScope.THIS
+) -> Response:
+    calendar.delete_block(session, user.id, block_id, scope)
     return Response(status_code=204)
 
 

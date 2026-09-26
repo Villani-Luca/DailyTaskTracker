@@ -11,8 +11,9 @@ import * as calendar from './views/calendar.js';
 import * as folder from './views/folder.js';
 import * as overview from './views/overview.js';
 import * as projects from './views/projects.js';
+import * as reports from './views/reports.js';
 
-const routes = { overview, calendar, projects, folder };
+const routes = { overview, calendar, projects, reports, folder };
 const INBOX_COLOR = '#8a8f98';
 
 let current = null;

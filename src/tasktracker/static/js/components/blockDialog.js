@@ -1,15 +1,24 @@
 // Create or edit a calendar block: a task placed on the calendar, time spent, or an appointment.
+// Planned blocks can repeat: every event of a series is a block of its own.
 
 import { api } from '../api.js';
 import { folderName, notifyChange, store } from '../store.js';
-import { addMinutes, esc, showError, toInputDateTime, toast } from '../util.js';
-import { confirmDialog, openDialog } from './dialog.js';
+import {
+  WEEKDAYS, addMinutes, addMonths, dateISO, describeRecurrence, esc, icons, showError, toInputDateTime,
+  toast,
+} from '../util.js';
+import { chooseDialog, confirmDialog, openDialog } from './dialog.js';
 import { openTaskDrawer } from './taskDrawer.js';
 
 const KIND_HINTS = {
   planned: 'Time you set aside. Shown as a tinted block on the calendar.',
   tracked: 'Time you actually spent. Counts toward the task and folder totals.',
 };
+const UNITS = { daily: 'days', weekly: 'weeks', monthly: 'months' };
+const SCOPES = [
+  { value: 'this', label: 'This event' },
+  { value: 'following', label: 'This and following events' },
+];
 
 function taskOptions(tasks, selectedId) {
   const groups = new Map();
@@ -26,6 +35,56 @@ function taskOptions(tasks, selectedId) {
         .join('')}</optgroup>`,
     )
     .join('');
+}
+
+function repeatHTML(rule, start) {
+  const weekdays = rule?.weekdays?.length ? rule.weekdays : [(start.getDay() + 6) % 7];
+  const until = rule?.until ?? dateISO(addMonths(start, 3));
+  return `
+    <label class="stacked">Repeat
+      <select name="frequency">
+        <option value="">Doesn't repeat</option>
+        ${Object.keys(UNITS)
+          .map((f) => `<option value="${f}"${rule?.frequency === f ? ' selected' : ''}>${f[0].toUpperCase()}${f.slice(1)}</option>`)
+          .join('')}
+      </select>
+    </label>
+    <div class="repeat-details" data-repeat-details>
+      <div class="grid-2">
+        <label class="stacked">Every
+          <span class="inline-field">
+            <input type="number" name="interval" min="1" max="99" value="${rule?.interval ?? 1}">
+            <span data-unit></span>
+          </span>
+        </label>
+        <label class="stacked">Until<input type="date" name="until" value="${until}"></label>
+      </div>
+      <fieldset class="weekday-picker" data-weekdays>
+        <legend>On</legend>
+        ${WEEKDAYS.map(
+          (name, i) => `<label><input type="checkbox" name="weekday" value="${i}"${weekdays.includes(i) ? ' checked' : ''}>${esc(name)}</label>`,
+        ).join('')}
+      </fieldset>
+      <p class="hint" data-monthly-hint></p>
+    </div>`;
+}
+
+/** The repeat rule the form describes, or null. Same shape as the API's. */
+function readRule(form) {
+  const f = form.elements;
+  if (!f.frequency.value || form.querySelector('input[name="kind"]:checked')?.value === 'tracked') return null;
+  const weekdays = [...form.querySelectorAll('input[name="weekday"]:checked')].map((i) => Number(i.value));
+  return {
+    frequency: f.frequency.value,
+    interval: Math.max(1, Number(f.interval.value) || 1),
+    weekdays: f.frequency.value === 'weekly' ? weekdays : [],
+    until: f.until.value,
+  };
+}
+
+function sameRule(a, b) {
+  const key = (r) => r && JSON.stringify([r.frequency, r.interval, [...r.weekdays].sort(), r.until]);
+  return key(a) === key(b);
 }
 
 export async function openBlockDialog({ block = null, start = null, end = null, kind = 'planned', taskId = null } = {}) {
@@ -45,11 +104,14 @@ export async function openBlockDialog({ block = null, start = null, end = null, 
   const selectable = tasks.filter((t) => t.status !== 'done' || t.id === linkedId);
   const running = block?.is_running ?? false;
   const currentKind = block?.kind ?? kind;
-  const startValue = toInputDateTime(block ? new Date(block.starts_at) : start);
+  const startDate = block ? new Date(block.starts_at) : start;
+  const startValue = toInputDateTime(startDate);
   const endValue = toInputDateTime(block?.ends_at ? new Date(block.ends_at) : block ? new Date() : end);
   const folderOptions = store.folders
     .map((f) => `<option value="${f.id}"${f.id === block?.folder_id ? ' selected' : ''}>${esc(f.name)}</option>`)
     .join('');
+  // Series actions apply to planned events only: time already spent is history.
+  const series = block?.kind === 'planned' ? block.recurrence : null;
 
   const dlg = openDialog({
     title: block ? 'Edit calendar block' : 'Add to calendar',
@@ -77,6 +139,10 @@ export async function openBlockDialog({ block = null, start = null, end = null, 
         <label class="stacked">Start<input type="datetime-local" name="starts_at" required value="${startValue}"></label>
         <label class="stacked">End<input type="datetime-local" name="ends_at" required value="${endValue}"${running ? ' disabled' : ''}></label>
       </div>
+      <div class="repeat-fields" data-repeat>
+        ${series ? `<p class="series-note">${icons.repeat}${esc(describeRecurrence(series, block.starts_at))}. Dragging on the calendar moves one event only.</p>` : ''}
+        ${repeatHTML(series, startDate)}
+      </div>
       <label class="stacked">Notes<textarea name="notes" rows="2">${esc(block?.notes ?? '')}</textarea></label>
       <footer class="dialog-footer">
         ${block ? '<button type="button" class="btn btn-danger-ghost" data-action="delete">Delete</button>' : ''}
@@ -89,14 +155,46 @@ export async function openBlockDialog({ block = null, start = null, end = null, 
   });
 
   const form = dlg.querySelector('form');
+  const f = form.elements;
   const appointment = form.querySelector('[data-appointment]');
+  const repeat = form.querySelector('[data-repeat]');
+  const kindValue = () => form.querySelector('input[name="kind"]:checked')?.value ?? currentKind;
+
   const syncAppointment = () => {
-    appointment.hidden = Boolean(form.elements.task_id.value);
+    appointment.hidden = Boolean(f.task_id.value);
+  };
+  const syncRepeat = () => {
+    repeat.hidden = running || kindValue() === 'tracked';
+    const frequency = f.frequency.value;
+    form.querySelector('[data-repeat-details]').hidden = !frequency;
+    form.querySelector('[data-weekdays]').hidden = frequency !== 'weekly';
+    form.querySelector('[data-unit]').textContent = UNITS[frequency] ?? '';
+    const day = f.starts_at.value ? new Date(f.starts_at.value).getDate() : null;
+    form.querySelector('[data-monthly-hint]').textContent =
+      frequency === 'monthly' && day
+        ? `On day ${day} of the month.${day > 28 ? ' Months without that day are skipped.' : ''}`
+        : '';
   };
   syncAppointment();
-  form.elements.task_id.addEventListener('change', syncAppointment);
+  syncRepeat();
+  f.task_id.addEventListener('change', syncAppointment);
   form.addEventListener('change', (e) => {
     if (e.target.name === 'kind') form.querySelector('[data-kind-hint]').textContent = KIND_HINTS[e.target.value];
+    syncRepeat();
+  });
+
+  // Weekly on the start's weekday: moving the start to another day moves the weekday along.
+  let startWeekday = (startDate.getDay() + 6) % 7;
+  f.starts_at.addEventListener('change', () => {
+    if (!f.starts_at.value) return;
+    const weekday = (new Date(f.starts_at.value).getDay() + 6) % 7;
+    const checked = [...form.querySelectorAll('input[name="weekday"]:checked')];
+    if (checked.length === 1 && Number(checked[0].value) === startWeekday) {
+      checked[0].checked = false;
+      form.querySelector(`input[name="weekday"][value="${weekday}"]`).checked = true;
+    }
+    startWeekday = weekday;
+    syncRepeat();
   });
 
   const done = (message) => {
@@ -105,9 +203,20 @@ export async function openBlockDialog({ block = null, start = null, end = null, 
     notifyChange();
   };
 
+  /** Which events a save applies to; null when cancelled. */
+  async function saveScope(rule) {
+    if (!series || kindValue() === 'tracked') return 'this';
+    if (sameRule(rule, series)) return chooseDialog('Save the changes to', SCOPES, { confirmLabel: 'Save' });
+    const message = rule
+      ? 'The new repeat applies to this and the following events.'
+      : 'Stop repeating after this event? The following events are deleted.';
+    return (await confirmDialog(message, { confirmLabel: rule ? 'Save' : 'Stop repeating', danger: !rule }))
+      ? 'following'
+      : null;
+  }
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const f = form.elements;
     const linkedTask = f.task_id.value ? Number(f.task_id.value) : null;
     const title = f.title.value.trim();
     if (!linkedTask && !title) {
@@ -119,6 +228,16 @@ export async function openBlockDialog({ block = null, start = null, end = null, 
       toast('Start and end are required', 'error');
       return;
     }
+    const rule = readRule(form);
+    if (rule && !rule.until) {
+      toast('Pick the day the repeat ends', 'error');
+      f.until.focus();
+      return;
+    }
+    if (rule?.frequency === 'weekly' && !rule.weekdays.length) {
+      toast('Pick at least one day of the week', 'error');
+      return;
+    }
     const payload = {
       task_id: linkedTask,
       title: linkedTask ? '' : title,
@@ -127,16 +246,21 @@ export async function openBlockDialog({ block = null, start = null, end = null, 
       notes: f.notes.value,
     };
     if (!running) {
-      payload.kind = form.querySelector('input[name="kind"]:checked').value;
+      payload.kind = kindValue();
       payload.ends_at = f.ends_at.value;
     }
     try {
       if (block) {
-        await api.blocks.update(block.id, payload);
+        const scope = await saveScope(rule);
+        if (!scope) return;
+        const ruleChanged = !sameRule(rule, series);
+        if (ruleChanged && (scope === 'following' || !series)) payload.recurrence = rule;
+        await api.blocks.update(block.id, payload, scope);
         done('Saved');
       } else {
+        if (rule) payload.recurrence = rule;
         await api.blocks.create(payload);
-        done('Added to calendar');
+        done(rule ? 'Added the repeating events' : 'Added to calendar');
       }
     } catch (err) {
       showError(err);
@@ -148,9 +272,18 @@ export async function openBlockDialog({ block = null, start = null, end = null, 
     if (!action) return;
     try {
       if (action === 'delete') {
-        if (!(await confirmDialog('Delete this calendar block?'))) return;
-        await api.blocks.remove(block.id);
-        done('Block deleted');
+        let scope = 'this';
+        if (series) {
+          scope = await chooseDialog('Delete', [...SCOPES, { value: 'all', label: 'All events' }], {
+            confirmLabel: 'Delete',
+            danger: true,
+          });
+          if (!scope) return;
+        } else if (!(await confirmDialog('Delete this calendar block?'))) {
+          return;
+        }
+        await api.blocks.remove(block.id, scope);
+        done(scope === 'this' ? 'Block deleted' : 'Events deleted');
       } else if (action === 'spent') {
         await api.blocks.update(block.id, { kind: 'tracked' });
         done('Marked as time spent');
