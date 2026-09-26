@@ -1,0 +1,7 @@
+# Not needed to run the app on Vercel.
+.venv/
+tests/
+.pytest_cache/
+.ruff_cache/
+**/__pycache__/
+*.db

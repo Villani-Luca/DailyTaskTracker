@@ -9,6 +9,8 @@ import webbrowser
 import uvicorn
 
 from tasktracker.config import Settings
+from tasktracker.db import init_db, make_engine, make_session_factory
+from tasktracker.services import auth
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -19,8 +21,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--reload", action="store_true", help="restart on code changes (dev)")
     parser.add_argument(
         "--demo",
-        action="store_true",
-        help="fill an empty database with sample folders, tasks and calendar blocks",
+        metavar="USERNAME",
+        help="fill USERNAME's empty account with sample folders, tasks and calendar blocks",
     )
     args = parser.parse_args(argv)
 
@@ -28,16 +30,26 @@ def main(argv: list[str] | None = None) -> None:
     host = args.host or settings.host
     port = args.port or settings.port
 
+    engine = make_engine(settings.database_url)
+    init_db(engine)
+    session_factory = make_session_factory(engine)
+    with session_factory() as session:
+        has_users = bool(auth.list_users(session))
+        demo_user = auth.get_user(session, args.demo) if args.demo else None
     if args.demo:
-        from tasktracker.db import init_db, make_engine, make_session_factory
         from tasktracker.demo import seed_demo_data
 
-        engine = make_engine(settings.database_url)
-        init_db(engine)
-        seeded = seed_demo_data(make_session_factory(engine))
-        print("Demo data added." if seeded else "Database already has data; demo data skipped.")
+        if demo_user is None:
+            parser.error(
+                f"no user {args.demo!r}; create it with: tasktracker-users create {args.demo}"
+            )
+        seeded = seed_demo_data(session_factory, demo_user.id)
+        print("Demo data added." if seeded else "That account already has data; demo skipped.")
+    engine.dispose()
 
-    print(f"Database: {settings.database_url}")
+    print(f"Database: {settings.safe_database_url}")
+    if not has_users:
+        print("No users yet. Create one with: tasktracker-users create <username>")
     if not args.no_browser:
         threading.Timer(1.5, webbrowser.open, args=(f"http://{host}:{port}",)).start()
 

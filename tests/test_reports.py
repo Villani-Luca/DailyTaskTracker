@@ -92,10 +92,10 @@ def test_time_report_clips_blocks_to_the_range(client, make_folder, make_task, m
     assert rows["Inbox"]["planned_minutes"] == 45
 
 
-def test_demo_data_seeds_once(app, client):
+def test_demo_data_seeds_once(app, client, user):
     factory = app.state.session_factory
-    assert seed_demo_data(factory, today=date(2026, 9, 25)) is True
-    assert seed_demo_data(factory, today=date(2026, 9, 25)) is False
+    assert seed_demo_data(factory, user.id, today=date(2026, 9, 25)) is True
+    assert seed_demo_data(factory, user.id, today=date(2026, 9, 25)) is False
 
     stats = _stats_by_name(client)
     assert set(stats) == {"Work", "Personal", "Learning"}

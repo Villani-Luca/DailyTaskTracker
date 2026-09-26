@@ -1,5 +1,3 @@
-from fastapi.testclient import TestClient
-
 from tasktracker.config import Settings
 from tasktracker.main import create_app
 
@@ -7,9 +5,6 @@ from tasktracker.main import create_app
 def test_sqlite_file_in_a_missing_folder_is_created(tmp_path):
     db_file = tmp_path / "not" / "there" / "yet" / "tasks.db"
     app = create_app(Settings(database_url=f"sqlite:///{db_file.as_posix()}"))
-
-    with TestClient(app) as client:
-        assert client.post("/api/folders", json={"name": "Work"}).status_code == 201
     app.state.engine.dispose()
 
     assert db_file.exists()

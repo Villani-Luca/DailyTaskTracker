@@ -25,7 +25,7 @@ from tasktracker.services.folders import list_folders
 INBOX_NAME = "Inbox"
 
 
-def build_overview(session: Session, today: date, days_ahead: int = 6) -> Overview:
+def build_overview(session: Session, user_id: int, today: date, days_ahead: int = 6) -> Overview:
     """What is going on now, and what is planned for today and the following days.
 
     A task belongs to a day when its planned date is that day, or when it has a planned
@@ -35,9 +35,9 @@ def build_overview(session: Session, today: date, days_ahead: int = 6) -> Overvi
     window_start = datetime.combine(today, time.min)
     window_end = datetime.combine(days[-1] + timedelta(days=1), time.min)
 
-    blocks = calendar.list_blocks(session, window_start, window_end)
+    blocks = calendar.list_blocks(session, user_id, window_start, window_end)
     tasks_by_day: dict[date, dict[int, Task]] = {day: {} for day in days}
-    for task in tasks.list_tasks(session, planned_from=today, planned_to=days[-1]):
+    for task in tasks.list_tasks(session, user_id, planned_from=today, planned_to=days[-1]):
         tasks_by_day[task.planned_date][task.id] = task  # type: ignore[index]
     for block in blocks:
         day_tasks = tasks_by_day.get(block.starts_at.date())
@@ -58,45 +58,50 @@ def build_overview(session: Session, today: date, days_ahead: int = 6) -> Overvi
             )
         )
 
-    running = calendar.get_running_timer(session)
+    running = calendar.get_running_timer(session, user_id)
     return Overview(
         today=today,
         active=[
             TaskRead.model_validate(t)
-            for t in tasks.list_tasks(session, statuses=[TaskStatus.IN_PROGRESS])
+            for t in tasks.list_tasks(session, user_id, statuses=[TaskStatus.IN_PROGRESS])
         ],
-        overdue=[TaskRead.model_validate(t) for t in tasks.list_tasks(session, overdue_on=today)],
+        overdue=[
+            TaskRead.model_validate(t) for t in tasks.list_tasks(session, user_id, overdue_on=today)
+        ],
         days=plans,
         running_timer=TimeBlockRead.model_validate(running) if running else None,
     )
 
 
-def folder_stats(session: Session, today: date) -> list[FolderStats]:
+def folder_stats(session: Session, user_id: int, today: date) -> list[FolderStats]:
     """Status breakdown, completion and time per folder (plus the inbox, if used)."""
+    owned = Task.user_id == user_id
     status_counts: dict[int | None, Counter[TaskStatus]] = defaultdict(Counter)
     for folder_id, status, count in session.execute(
-        select(Task.folder_id, Task.status, func.count()).group_by(Task.folder_id, Task.status)
+        select(Task.folder_id, Task.status, func.count())
+        .where(owned)
+        .group_by(Task.folder_id, Task.status)
     ):
         status_counts[folder_id][status] = count
 
     estimates = dict(
         session.execute(
-            select(Task.folder_id, func.coalesce(func.sum(Task.estimate_minutes), 0)).group_by(
-                Task.folder_id
-            )
+            select(Task.folder_id, func.coalesce(func.sum(Task.estimate_minutes), 0))
+            .where(owned)
+            .group_by(Task.folder_id)
         ).all()
     )
     overdue = dict(
         session.execute(
             select(Task.folder_id, func.count())
-            .where(tasks.overdue_clause(today))
+            .where(owned, tasks.overdue_clause(today))
             .group_by(Task.folder_id)
         ).all()
     )
-    minutes = _minutes_by_folder(session)
+    minutes = _minutes_by_folder(session, user_id)
 
     entries: list[tuple[int | None, str, str]] = [
-        (f.id, f.name, f.color) for f in list_folders(session)
+        (f.id, f.name, f.color) for f in list_folders(session, user_id)
     ]
     if status_counts.get(None) or minutes.get(None):
         entries.insert(0, (None, INBOX_NAME, INBOX_COLOR))
@@ -126,10 +131,12 @@ def folder_stats(session: Session, today: date) -> list[FolderStats]:
     return stats
 
 
-def time_report(session: Session, starts_at: datetime, ends_at: datetime) -> TimeReport:
+def time_report(
+    session: Session, user_id: int, starts_at: datetime, ends_at: datetime
+) -> TimeReport:
     """Planned vs. tracked minutes per folder, clipped to ``[starts_at, ends_at)``."""
-    minutes = _minutes_by_folder(session, starts_at, ends_at)
-    folders = {f.id: f for f in list_folders(session)}
+    minutes = _minutes_by_folder(session, user_id, starts_at, ends_at)
+    folders = {f.id: f for f in list_folders(session, user_id)}
     rows = []
     for folder_id, by_kind in minutes.items():
         folder = folders.get(folder_id) if folder_id is not None else None
@@ -154,12 +161,15 @@ def time_report(session: Session, starts_at: datetime, ends_at: datetime) -> Tim
 
 def _minutes_by_folder(
     session: Session,
+    user_id: int,
     starts_at: datetime | None = None,
     ends_at: datetime | None = None,
 ) -> dict[int | None, dict[BlockKind, int]]:
     folder_id = func.coalesce(Task.folder_id, TimeBlock.folder_id)
-    stmt = select(folder_id, TimeBlock.kind, TimeBlock.starts_at, TimeBlock.ends_at).outerjoin(
-        Task, TimeBlock.task_id == Task.id
+    stmt = (
+        select(folder_id, TimeBlock.kind, TimeBlock.starts_at, TimeBlock.ends_at)
+        .outerjoin(Task, TimeBlock.task_id == Task.id)
+        .where(TimeBlock.user_id == user_id)
     )
     if starts_at is not None:
         stmt = stmt.where(or_(TimeBlock.ends_at.is_(None), TimeBlock.ends_at > starts_at))

@@ -12,3 +12,7 @@ build/
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Vercel CLI (project link and pulled env files)
+.vercel/
+.env*.local

@@ -14,22 +14,27 @@ from tasktracker.services.folders import get_folder
 from tasktracker.services.tasks import get_task, set_status
 
 
-def _block_query() -> Select[tuple[TimeBlock]]:
-    return select(TimeBlock).options(
-        selectinload(TimeBlock.task).selectinload(Task.folder),
-        selectinload(TimeBlock.folder),
+def _block_query(user_id: int) -> Select[tuple[TimeBlock]]:
+    return (
+        select(TimeBlock)
+        .where(TimeBlock.user_id == user_id)
+        .options(
+            selectinload(TimeBlock.task).selectinload(Task.folder),
+            selectinload(TimeBlock.folder),
+        )
     )
 
 
 def list_blocks(
     session: Session,
+    user_id: int,
     starts_at: datetime,
     ends_at: datetime,
     kind: BlockKind | None = None,
 ) -> list[TimeBlock]:
     """Blocks overlapping ``[starts_at, ends_at)``, including a running timer."""
     stmt = (
-        _block_query()
+        _block_query(user_id)
         .where(
             TimeBlock.starts_at < ends_at,
             or_(TimeBlock.ends_at.is_(None), TimeBlock.ends_at > starts_at),
@@ -41,20 +46,20 @@ def list_blocks(
     return list(session.scalars(stmt))
 
 
-def get_block(session: Session, block_id: int) -> TimeBlock:
-    block = session.scalar(_block_query().where(TimeBlock.id == block_id))
+def get_block(session: Session, user_id: int, block_id: int) -> TimeBlock:
+    block = session.scalar(_block_query(user_id).where(TimeBlock.id == block_id))
     if block is None:
         raise NotFoundError("Time block", block_id)
     return block
 
 
-def create_block(session: Session, data: TimeBlockCreate) -> TimeBlock:
-    block = TimeBlock(**data.model_dump(exclude={"task_id"}))
+def create_block(session: Session, user_id: int, data: TimeBlockCreate) -> TimeBlock:
+    block = TimeBlock(user_id=user_id, **data.model_dump(exclude={"task_id"}))
     if data.task_id is not None:
-        block.task = get_task(session, data.task_id)
+        block.task = get_task(session, user_id, data.task_id)
         block.folder_id = None  # task blocks are colored by the task's folder
     elif data.folder_id is not None:
-        get_folder(session, data.folder_id)
+        get_folder(session, user_id, data.folder_id)
 
     if block.task is not None and block.kind is BlockKind.PLANNED:
         _follow_plan(block.task, old_day=None, new_day=block.starts_at.date())
@@ -63,8 +68,8 @@ def create_block(session: Session, data: TimeBlockCreate) -> TimeBlock:
     return block
 
 
-def update_block(session: Session, block_id: int, data: TimeBlockUpdate) -> TimeBlock:
-    block = get_block(session, block_id)
+def update_block(session: Session, user_id: int, block_id: int, data: TimeBlockUpdate) -> TimeBlock:
+    block = get_block(session, user_id, block_id)
     changes = data.changes()
     old_day = block.starts_at.date()
 
@@ -72,9 +77,9 @@ def update_block(session: Session, block_id: int, data: TimeBlockUpdate) -> Time
         raise InvalidOperationError("Stop the timer before changing this block's kind")
     if "task_id" in changes:
         task_id = changes.pop("task_id")
-        block.task = get_task(session, task_id) if task_id is not None else None
+        block.task = get_task(session, user_id, task_id) if task_id is not None else None
     if changes.get("folder_id") is not None:
-        get_folder(session, changes["folder_id"])
+        get_folder(session, user_id, changes["folder_id"])
     for field, value in changes.items():
         setattr(block, field, value)
 
@@ -91,8 +96,8 @@ def update_block(session: Session, block_id: int, data: TimeBlockUpdate) -> Time
     return block
 
 
-def delete_block(session: Session, block_id: int) -> None:
-    session.delete(get_block(session, block_id))
+def delete_block(session: Session, user_id: int, block_id: int) -> None:
+    session.delete(get_block(session, user_id, block_id))
     session.commit()
 
 
@@ -109,29 +114,33 @@ def _follow_plan(task: Task, old_day: date | None, new_day: date) -> None:
 # --- Timer ---------------------------------------------------------------------------
 
 
-def get_running_timer(session: Session) -> TimeBlock | None:
-    stmt = _block_query().where(TimeBlock.kind == BlockKind.TRACKED, TimeBlock.ends_at.is_(None))
+def get_running_timer(session: Session, user_id: int) -> TimeBlock | None:
+    stmt = _block_query(user_id).where(
+        TimeBlock.kind == BlockKind.TRACKED, TimeBlock.ends_at.is_(None)
+    )
     return session.scalars(stmt).first()
 
 
-def start_timer(session: Session, task_id: int) -> TimeBlock:
-    """Start tracking time on a task. Only one timer runs at a time."""
-    task = get_task(session, task_id)
-    running = get_running_timer(session)
+def start_timer(session: Session, user_id: int, task_id: int) -> TimeBlock:
+    """Start tracking time on a task. Each user has at most one timer running."""
+    task = get_task(session, user_id, task_id)
+    running = get_running_timer(session, user_id)
     if running is not None:
         if running.task_id == task_id:
             return running
         running.stop()
 
     set_status(task, TaskStatus.IN_PROGRESS)
-    block = TimeBlock(kind=BlockKind.TRACKED, task=task, starts_at=now(), ends_at=None)
+    block = TimeBlock(
+        user_id=user_id, kind=BlockKind.TRACKED, task=task, starts_at=now(), ends_at=None
+    )
     session.add(block)
     session.commit()
     return block
 
 
-def stop_timer(session: Session) -> TimeBlock | None:
-    running = get_running_timer(session)
+def stop_timer(session: Session, user_id: int) -> TimeBlock | None:
+    running = get_running_timer(session, user_id)
     if running is None:
         return None
     running.stop()

@@ -1,14 +1,32 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from contextlib import ExitStack
 from typing import Any
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tasktracker.api.deps import SESSION_COOKIE
 from tasktracker.config import Settings
 from tasktracker.main import create_app
+from tasktracker.models import User
+from tasktracker.services import auth
+
+PASSWORD = "correct horse battery staple"
+
+
+@pytest.fixture(scope="session")
+def password() -> str:
+    """Every test user's password."""
+    return PASSWORD
+
+
+@pytest.fixture(scope="session")
+def password_hash() -> str:
+    # Hashing is slow on purpose; do it once and share the result between test users.
+    return auth.hash_password(PASSWORD)
 
 
 @pytest.fixture
@@ -17,7 +35,44 @@ def app() -> FastAPI:
 
 
 @pytest.fixture
-def client(app: FastAPI) -> Iterator[TestClient]:
+def make_user(app: FastAPI, password_hash: str) -> Callable[[str], User]:
+    """Add a user whose password is the ``password`` fixture."""
+
+    def _make(username: str) -> User:
+        with app.state.session_factory() as session:
+            user = User(username=username, password_hash=password_hash)
+            session.add(user)
+            session.commit()
+            return user
+
+    return _make
+
+
+@pytest.fixture
+def client_for(app: FastAPI) -> Iterator[Callable[[User], TestClient]]:
+    """A client that is already logged in as ``user``."""
+    with ExitStack() as stack:
+
+        def _client(user: User) -> TestClient:
+            with app.state.session_factory() as session:
+                token = auth.start_session(session, user.id)
+            return stack.enter_context(TestClient(app, cookies={SESSION_COOKIE: token}))
+
+        yield _client
+
+
+@pytest.fixture
+def user(make_user: Callable[[str], User]) -> User:
+    return make_user("alice")
+
+
+@pytest.fixture
+def client(client_for: Callable[[User], TestClient], user: User) -> TestClient:
+    return client_for(user)
+
+
+@pytest.fixture
+def anon_client(app: FastAPI) -> Iterator[TestClient]:
     with TestClient(app) as test_client:
         yield test_client
 

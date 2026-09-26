@@ -20,8 +20,12 @@ _STATUS_RANK = {
 _PRIORITY_RANK = {Priority.HIGH: 0, Priority.MEDIUM: 1, Priority.LOW: 2}
 
 
-def task_query() -> Select[tuple[Task]]:
-    return select(Task).options(selectinload(Task.folder), selectinload(Task.time_blocks))
+def task_query(user_id: int) -> Select[tuple[Task]]:
+    return (
+        select(Task)
+        .where(Task.user_id == user_id)
+        .options(selectinload(Task.folder), selectinload(Task.time_blocks))
+    )
 
 
 def sort_tasks(tasks: Iterable[Task]) -> list[Task]:
@@ -44,6 +48,7 @@ def overdue_clause(today: date) -> ColumnElement[bool]:
 
 def list_tasks(
     session: Session,
+    user_id: int,
     *,
     folder_id: int | None = None,
     inbox: bool = False,
@@ -53,7 +58,7 @@ def list_tasks(
     overdue_on: date | None = None,
     search: str | None = None,
 ) -> list[Task]:
-    stmt = task_query()
+    stmt = task_query(user_id)
     if inbox:
         stmt = stmt.where(Task.folder_id.is_(None))
     elif folder_id is not None:
@@ -71,28 +76,28 @@ def list_tasks(
     return sort_tasks(session.scalars(stmt))
 
 
-def get_task(session: Session, task_id: int) -> Task:
-    task = session.scalar(task_query().where(Task.id == task_id))
+def get_task(session: Session, user_id: int, task_id: int) -> Task:
+    task = session.scalar(task_query(user_id).where(Task.id == task_id))
     if task is None:
         raise NotFoundError("Task", task_id)
     return task
 
 
-def create_task(session: Session, data: TaskCreate) -> Task:
+def create_task(session: Session, user_id: int, data: TaskCreate) -> Task:
     if data.folder_id is not None:
-        get_folder(session, data.folder_id)
-    task = Task(**data.model_dump(exclude={"status"}))
+        get_folder(session, user_id, data.folder_id)
+    task = Task(user_id=user_id, **data.model_dump(exclude={"status"}))
     set_status(task, data.status)
     session.add(task)
     session.commit()
     return task
 
 
-def update_task(session: Session, task_id: int, data: TaskUpdate) -> Task:
-    task = get_task(session, task_id)
+def update_task(session: Session, user_id: int, task_id: int, data: TaskUpdate) -> Task:
+    task = get_task(session, user_id, task_id)
     changes = data.changes()
     if changes.get("folder_id") is not None:
-        get_folder(session, changes["folder_id"])
+        get_folder(session, user_id, changes["folder_id"])
     if "status" in changes:
         set_status(task, changes.pop("status"))
     for field, value in changes.items():
@@ -115,37 +120,38 @@ def set_status(task: Task, status: TaskStatus) -> None:
         task.completed_at = None
 
 
-def delete_task(session: Session, task_id: int) -> None:
+def delete_task(session: Session, user_id: int, task_id: int) -> None:
     """Delete a task together with its comments and calendar blocks."""
-    session.delete(get_task(session, task_id))
+    session.delete(get_task(session, user_id, task_id))
     session.commit()
 
 
 # --- Comments ------------------------------------------------------------------------
 
 
-def list_comments(session: Session, task_id: int) -> list[Comment]:
-    _ensure_task_exists(session, task_id)
+def list_comments(session: Session, user_id: int, task_id: int) -> list[Comment]:
+    _ensure_task_exists(session, user_id, task_id)
     stmt = select(Comment).where(Comment.task_id == task_id).order_by(Comment.id)
     return list(session.scalars(stmt))
 
 
-def add_comment(session: Session, task_id: int, data: CommentCreate) -> Comment:
-    _ensure_task_exists(session, task_id)
+def add_comment(session: Session, user_id: int, task_id: int, data: CommentCreate) -> Comment:
+    _ensure_task_exists(session, user_id, task_id)
     comment = Comment(task_id=task_id, body=data.body)
     session.add(comment)
     session.commit()
     return comment
 
 
-def delete_comment(session: Session, comment_id: int) -> None:
+def delete_comment(session: Session, user_id: int, comment_id: int) -> None:
     comment = session.get(Comment, comment_id)
-    if comment is None:
+    if comment is None or comment.task.user_id != user_id:
         raise NotFoundError("Comment", comment_id)
     session.delete(comment)
     session.commit()
 
 
-def _ensure_task_exists(session: Session, task_id: int) -> None:
-    if session.get(Task, task_id) is None:
+def _ensure_task_exists(session: Session, user_id: int, task_id: int) -> None:
+    task = session.get(Task, task_id)
+    if task is None or task.user_id != user_id:
         raise NotFoundError("Task", task_id)

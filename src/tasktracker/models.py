@@ -1,8 +1,11 @@
 """ORM models.
 
-All datetimes are naive *local* wall-clock time: this is a single-user app running on
-your own machine, and the calendar speaks local time too, so there is no timezone to
-reconcile.
+Every folder, task and calendar block belongs to one user, and users only ever see
+their own records. Comments belong to a task, and so to the task's owner.
+
+All datetimes are naive *local* wall-clock time: the calendar speaks local time too, so
+there is no timezone to reconcile. "Local" is the users' timezone
+(``TASKTRACKER_TIMEZONE``), or the server's own if that isn't set.
 """
 
 from __future__ import annotations
@@ -10,16 +13,21 @@ from __future__ import annotations
 import enum
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import Enum, ForeignKey, String, Text, func, select
+from sqlalchemy import Enum, ForeignKey, String, Text, UniqueConstraint, func, select
 from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
+from tasktracker.config import local_timezone
 from tasktracker.db import Base
 
 INBOX_COLOR = "#8a8f98"  # tasks and appointments that are not in a folder
 
 
 def now() -> datetime:
-    return datetime.now().replace(microsecond=0)
+    return datetime.now(local_timezone()).replace(tzinfo=None, microsecond=0)
+
+
+def today() -> date:
+    return now().date()
 
 
 class TaskStatus(enum.StrEnum):
@@ -50,11 +58,41 @@ def _enum_column(enum_cls: type[enum.Enum]) -> Enum:
     )
 
 
-class Folder(Base):
-    __tablename__ = "folders"
+class User(Base):
+    __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(100), unique=True)
+    username: Mapped[str] = mapped_column(String(100), unique=True)  # stored lowercase
+    password_hash: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(default=now)
+
+
+class LoginSession(Base):
+    """A logged-in browser. Only a hash of the cookie's token is stored."""
+
+    __tablename__ = "login_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(default=now)
+    expires_at: Mapped[datetime]
+
+    user: Mapped[User] = relationship()
+
+
+def _owner_column() -> Mapped[int]:
+    """The user a record belongs to. Deleting a user deletes their records."""
+    return mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+
+
+class Folder(Base):
+    __tablename__ = "folders"
+    __table_args__ = (UniqueConstraint("user_id", "name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = _owner_column()
+    name: Mapped[str] = mapped_column(String(100))
     color: Mapped[str] = mapped_column(String(7))
     description: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(default=now)
@@ -67,6 +105,7 @@ class Task(Base):
     __tablename__ = "tasks"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = _owner_column()
     folder_id: Mapped[int | None] = mapped_column(
         ForeignKey("folders.id", ondelete="SET NULL"), index=True
     )
@@ -141,6 +180,7 @@ class TimeBlock(Base):
     __tablename__ = "time_blocks"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = _owner_column()
     kind: Mapped[BlockKind] = mapped_column(_enum_column(BlockKind), index=True)
     task_id: Mapped[int | None] = mapped_column(
         ForeignKey("tasks.id", ondelete="CASCADE"), index=True

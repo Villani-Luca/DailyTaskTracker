@@ -1,4 +1,4 @@
-"""Sample data so a fresh install has something to look at (``tasktracker --demo``)."""
+"""Sample data so a new account has something to look at (``tasktracker --demo USERNAME``)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from datetime import date, datetime, time, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from tasktracker.models import BlockKind, Folder, Priority, TaskStatus
+from tasktracker.models import BlockKind, Folder, Priority, TaskStatus, now
 from tasktracker.schemas import CommentCreate, FolderCreate, TaskCreate, TimeBlockCreate
 from tasktracker.services import calendar, folders, tasks
 
@@ -56,20 +56,22 @@ _COMMENTS = [
 ]
 
 
-def seed_demo_data(session_factory: sessionmaker[Session], today: date | None = None) -> bool:
-    """Populate an empty database. Returns False (and does nothing) if folders exist."""
-    today = today or date.today()
+def seed_demo_data(
+    session_factory: sessionmaker[Session], user_id: int, today: date | None = None
+) -> bool:
+    """Populate a user's empty account. Returns False (and does nothing) if they have folders."""
+    today = today or now().date()
 
     def day(offset: int | None) -> date | None:
         return None if offset is None else today + timedelta(days=offset)
 
     with session_factory() as session:
-        if session.scalar(select(func.count(Folder.id))):
+        if session.scalar(select(func.count(Folder.id)).where(Folder.user_id == user_id)):
             return False
 
         folder_ids = {
             name: folders.create_folder(
-                session, FolderCreate(name=name, color=color, description=description)
+                session, user_id, FolderCreate(name=name, color=color, description=description)
             ).id
             for name, color, description in _FOLDERS
         }
@@ -77,6 +79,7 @@ def seed_demo_data(session_factory: sessionmaker[Session], today: date | None = 
         for folder, title, status, priority, planned, estimate, due in _TASKS:
             task = tasks.create_task(
                 session,
+                user_id,
                 TaskCreate(
                     title=title,
                     folder_id=folder_ids[folder],
@@ -94,6 +97,7 @@ def seed_demo_data(session_factory: sessionmaker[Session], today: date | None = 
             is_appointment = folder is not None
             calendar.create_block(
                 session,
+                user_id,
                 TimeBlockCreate(
                     kind=kind,
                     task_id=None if is_appointment else task_ids[title],
@@ -105,5 +109,5 @@ def seed_demo_data(session_factory: sessionmaker[Session], today: date | None = 
             )
 
         for title, body in _COMMENTS:
-            tasks.add_comment(session, task_ids[title], CommentCreate(body=body))
+            tasks.add_comment(session, user_id, task_ids[title], CommentCreate(body=body))
     return True

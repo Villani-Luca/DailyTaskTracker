@@ -106,9 +106,25 @@ async function refreshAll() {
   }
 }
 
+async function initAccount() {
+  const me = await api.auth.me(); // not logged in: api.js sends us to /login
+  const name = document.getElementById('account-name');
+  name.textContent = me.username;
+  name.title = `Logged in as ${me.username}`;
+  document.getElementById('logout-btn').addEventListener('click', async () => {
+    try {
+      await api.auth.logout();
+      location.replace('/login');
+    } catch (err) {
+      showError(err);
+    }
+  });
+}
+
 async function init() {
   installTooltips();
   initTheme();
+  await initAccount();
   document.getElementById('new-folder-btn').addEventListener('click', async () => {
     const created = await openFolderDialog();
     if (created) location.hash = `#/folder/${created.id}`;

@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from tasktracker.config import local_timezone
 from tasktracker.models import BlockKind, Priority, TaskStatus
 
 HEX_COLOR = r"^#[0-9a-fA-F]{6}$"
@@ -28,7 +29,7 @@ Minutes = Annotated[int, Field(ge=0, le=100_000)]
 def _to_local_naive(value: datetime) -> datetime:
     """Accept any ISO datetime; store it as naive local time (see models.py)."""
     if value.tzinfo is not None:
-        value = value.astimezone().replace(tzinfo=None)
+        value = value.astimezone(local_timezone()).replace(tzinfo=None)
     return value.replace(microsecond=0)
 
 
@@ -58,6 +59,19 @@ class PatchModel(BaseModel):
 
     def changes(self) -> dict[str, Any]:
         return self.model_dump(exclude_unset=True)
+
+
+# --- Users ---------------------------------------------------------------------------
+
+
+class LoginRequest(BaseModel):
+    username: Annotated[str, StringConstraints(max_length=100)]
+    password: Annotated[str, StringConstraints(max_length=1024)]
+
+
+class UserRead(ReadModel):
+    id: int
+    username: str
 
 
 # --- Folders -------------------------------------------------------------------------

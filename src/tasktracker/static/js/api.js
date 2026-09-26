@@ -23,6 +23,12 @@ async function request(method, path, body) {
     init.body = JSON.stringify(body);
   }
   const res = await fetch(`/api${path}`, init);
+  if (res.status === 401 && path !== '/auth/login') {
+    // Logged out, or the session expired: go and log in. The promise never settles, so
+    // the page doesn't flash an error while it navigates away.
+    location.assign('/login');
+    return new Promise(() => {});
+  }
   if (res.status === 204) return null;
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new ApiError(errorMessage(data, res.statusText), res.status);
@@ -40,6 +46,11 @@ function query(params = {}) {
 }
 
 export const api = {
+  auth: {
+    me: () => request('GET', '/auth/me'),
+    login: (username, password) => request('POST', '/auth/login', { username, password }),
+    logout: () => request('POST', '/auth/logout'),
+  },
   folders: {
     list: () => request('GET', '/folders'),
     stats: () => request('GET', '/folders/stats'),

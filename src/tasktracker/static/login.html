@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Log in · Daily Task Tracker</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='4' fill='%232a78d6'/><path d='M4 8.5l2.5 2.5 5.5-6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+    <link rel="stylesheet" href="/static/css/app.css">
+    <script type="module" src="/static/js/login.js"></script>
+  </head>
+  <body class="login-page">
+    <main class="login">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 16 16" width="14" height="14"><path d="M4 8.5l2.5 2.5 5.5-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        Daily Tasks
+      </div>
+      <form id="login-form" class="card login-card">
+        <h1>Log in</h1>
+        <label class="stacked">Username
+          <input name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="100" required autofocus>
+        </label>
+        <label class="stacked">Password
+          <input name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <p id="login-error" class="login-error" role="alert" hidden></p>
+        <button type="submit" class="btn btn-primary">Log in</button>
+      </form>
+      <p class="muted small">No account? Ask the person who runs this app to create one.</p>
+    </main>
+  </body>
+</html>

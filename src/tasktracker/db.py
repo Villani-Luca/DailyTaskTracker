@@ -14,7 +14,16 @@ class Base(DeclarativeBase):
     pass
 
 
+def normalize_url(url: str) -> str:
+    """Hosted Postgres hands out ``postgres://`` or ``postgresql://`` URLs; use psycopg 3."""
+    for scheme in ("postgres://", "postgresql://"):
+        if url.startswith(scheme):
+            return "postgresql+psycopg://" + url.removeprefix(scheme)
+    return url
+
+
 def make_engine(url: str) -> Engine:
+    url = normalize_url(url)
     kwargs: dict[str, Any] = {}
     is_sqlite = url.startswith("sqlite")
     if is_sqlite:
@@ -27,6 +36,12 @@ def make_engine(url: str) -> Engine:
         else:
             # SQLite creates the file, but not the folder it lives in.
             Path(database).parent.mkdir(parents=True, exist_ok=True)
+    else:
+        # Serverless hosts freeze between requests; don't hand out connections that died.
+        kwargs["pool_pre_ping"] = True
+        if url.startswith("postgresql+psycopg"):
+            # Connection poolers in transaction mode (Neon, Supabase) lose prepared statements.
+            kwargs["connect_args"] = {"prepare_threshold": None}
 
     engine = create_engine(url, **kwargs)
 

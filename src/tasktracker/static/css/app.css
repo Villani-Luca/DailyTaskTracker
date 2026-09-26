@@ -179,13 +179,22 @@ a:hover { text-decoration: underline; }
   text-transform: uppercase;
 }
 
-.sidebar-footer {
+.sidebar-footer { display: flex; flex-direction: column; gap: 10px; margin-top: auto; }
+.sidebar-account, .sidebar-links {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-top: auto;
   padding: 0 4px;
+}
+.sidebar-account { padding: 12px 4px 0 10px; border-top: 1px solid var(--border); color: var(--text-2); }
+.account-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
 }
 
 .main { display: flex; flex-direction: column; min-width: 0; height: 100vh; }
@@ -259,6 +268,7 @@ a:hover { text-decoration: underline; }
 .btn-danger:hover { background: var(--danger); filter: brightness(1.08); }
 .btn-danger-ghost { color: var(--danger-ink); }
 .btn-ghost { border-color: transparent; background: transparent; color: var(--text-2); }
+.btn:disabled { opacity: 0.6; cursor: default; }
 
 .icon-btn {
   display: inline-grid;
@@ -825,6 +835,14 @@ dialog.confirm { width: min(420px, calc(100vw - 32px)); }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.error { background: var(--danger); color: #fff; }
 
+/* --- Login page ------------------------------------------------------------------- */
+
+.login-page { display: grid; place-items: center; padding: 24px 16px; }
+.login { display: flex; flex-direction: column; align-items: center; gap: 18px; width: min(360px, 100%); }
+.login-card { display: flex; flex-direction: column; gap: 14px; width: 100%; padding: 24px; }
+.login-card .btn { justify-content: center; margin-top: 4px; }
+.login-error { color: var(--danger-ink); font-size: 13px; }
+
 /* --- Responsive ------------------------------------------------------------------- */
 
 @media (max-width: 1100px) {
@@ -836,7 +854,8 @@ dialog.confirm { width: min(420px, calc(100vw - 32px)); }
   .layout { grid-template-columns: 1fr; height: auto; }
   .sidebar { border-right: 0; border-bottom: 1px solid var(--border); gap: 12px; }
   .nav { flex-direction: row; flex-wrap: wrap; }
-  .sidebar-section, .sidebar-footer { display: none; }
+  .sidebar-section, .sidebar-links { display: none; }
+  .sidebar-account { padding-top: 10px; }
   .main { height: auto; }
   .view-container { padding: 16px; overflow: visible; }
   .topbar { padding: 10px 16px; flex-wrap: wrap; }
