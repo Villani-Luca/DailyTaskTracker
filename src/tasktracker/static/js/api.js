@@ -79,6 +79,14 @@ export const api = {
     update: (id, data, scope) => request('PATCH', `/blocks/${id}${query({ scope })}`, data),
     remove: (id, scope) => request('DELETE', `/blocks/${id}${query({ scope })}`),
   },
+  // filter: {} for all, { folder_id } for one folder, { inbox: true } for the inbox
+  appointments: (filter = {}) => request('GET', `/appointments${query(filter)}`),
+  imports: {
+    // source: { content, filename } (a file or pasted text) or { url }
+    preview: (source) => request('POST', '/import/preview', source),
+    // data: the source plus { folder_id, keys, include_past }
+    run: (data) => request('POST', '/import', data),
+  },
   timer: {
     get: () => request('GET', '/timer'),
     start: (taskId) => request('POST', '/timer/start', { task_id: taskId }),

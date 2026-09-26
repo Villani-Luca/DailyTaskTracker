@@ -9,6 +9,7 @@ from typing import Annotated, Any, ClassVar
 from pydantic import (
     AfterValidator,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     StringConstraints,
@@ -25,6 +26,9 @@ Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, ma
 OptionalTitle = Annotated[str, StringConstraints(strip_whitespace=True, max_length=200)]
 Color = Annotated[str, StringConstraints(pattern=HEX_COLOR)]
 Minutes = Annotated[int, Field(ge=0, le=100_000)]
+Location = Annotated[str, StringConstraints(strip_whitespace=True, max_length=500)]
+# Columns added after the first release are NULL in old rows; the API shows them as "".
+TextOrEmpty = Annotated[str, BeforeValidator(lambda v: v or "")]
 
 
 def _to_local_naive(value: datetime) -> datetime:
@@ -194,6 +198,7 @@ class TimeBlockCreate(BaseModel):
     title: OptionalTitle = ""
     starts_at: LocalDateTime
     ends_at: LocalDateTime
+    location: Location = ""
     notes: str = ""
     recurrence: RecurrenceRule | None = None
 
@@ -209,7 +214,7 @@ class TimeBlockCreate(BaseModel):
 
 
 class TimeBlockUpdate(PatchModel):
-    non_nullable = frozenset({"kind", "title", "starts_at", "ends_at", "notes"})
+    non_nullable = frozenset({"kind", "title", "starts_at", "ends_at", "location", "notes"})
 
     kind: BlockKind | None = None
     task_id: int | None = None
@@ -217,6 +222,7 @@ class TimeBlockUpdate(PatchModel):
     title: OptionalTitle | None = None
     starts_at: LocalDateTime | None = None
     ends_at: LocalDateTime | None = None
+    location: Location | None = None
     notes: str | None = None
     recurrence: RecurrenceRule | None = None  # null: stop repeating after this event
 
@@ -232,7 +238,9 @@ class TimeBlockRead(ReadModel):
     color: str
     starts_at: datetime
     ends_at: datetime | None
+    location: TextOrEmpty
     notes: str
+    source: TextOrEmpty  # where an imported appointment came from
     duration_minutes: int
     is_running: bool
     recurrence: RecurrenceRead | None
@@ -240,6 +248,86 @@ class TimeBlockRead(ReadModel):
 
 class TimerStart(BaseModel):
     task_id: int
+
+
+class AppointmentSummary(BaseModel):
+    """An appointment of a folder: a one-off event, or a whole repeating series."""
+
+    block: TimeBlockRead  # the next event; the last one when they are all over
+    events: int  # events in the series (1 for a one-off)
+    upcoming: int  # events that have not ended yet
+    planned_minutes: int
+    tracked_minutes: int
+
+
+# --- Importing appointments ----------------------------------------------------------
+
+MAX_IMPORT_CHARS = 5_000_000
+
+
+class ImportSource(BaseModel):
+    """What to import from: the text of a file (.ics, .eml), pasted text, or a link."""
+
+    content: Annotated[str, StringConstraints(max_length=MAX_IMPORT_CHARS)] | None = None
+    filename: Annotated[str, StringConstraints(strip_whitespace=True, max_length=200)] = ""
+    url: Annotated[str, StringConstraints(strip_whitespace=True, max_length=2000)] | None = None
+
+    @model_validator(mode="after")
+    def _one_source(self) -> ImportSource:
+        if bool(self.content and self.content.strip()) == bool(self.url):
+            raise ValueError("send either the content of a file or a link")
+        return self
+
+
+class ImportRequest(ImportSource):
+    folder_id: int | None = None  # every imported appointment goes into this folder
+    keys: list[str] | None = None  # the preview's events to import; None: all of them
+    include_past: bool = False  # also events that are already over
+
+
+class ImportStatus(enum.StrEnum):
+    NEW = "new"
+    UPDATE = "update"  # imported before: the events are replaced
+    CANCEL = "cancel"  # the invite cancels events imported before
+
+
+class ImportEvent(BaseModel):
+    key: str
+    status: ImportStatus
+    title: str
+    starts_at: datetime
+    ends_at: datetime
+    all_day: bool  # becomes a task planned for that day
+    location: str
+    organizer: str
+    recurrence: RecurrenceRule | None
+    events: int  # events it adds (a series: from today on, unless past ones are included)
+    past_events: int  # events already over, skipped unless past ones are included
+    warnings: list[str]
+
+
+class AppointmentDraft(BaseModel):
+    """An email without an invite: what to prefill a new appointment with."""
+
+    title: str
+    notes: str
+    source: str
+
+
+class ImportPreview(BaseModel):
+    source: str
+    events: list[ImportEvent]
+    draft: AppointmentDraft | None
+    warnings: list[str]
+
+
+class ImportResult(BaseModel):
+    added: int  # new appointments (a series counts once)
+    updated: int
+    cancelled: int
+    blocks: int  # calendar blocks created
+    tasks: int  # all-day events, added as tasks
+    warnings: list[str]
 
 
 # --- Overview & stats ----------------------------------------------------------------

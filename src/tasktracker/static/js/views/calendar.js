@@ -5,6 +5,7 @@
 
 import { api } from '../api.js';
 import { openBlockDialog } from '../components/blockDialog.js';
+import { acceptDroppedFiles, openImportDialog } from '../components/importDialog.js';
 import { openTaskDrawer } from '../components/taskDrawer.js';
 import { timeBarsHTML } from '../components/timeBars.js';
 import { folderName, notifyChange } from '../store.js';
@@ -78,6 +79,12 @@ export async function mount(root) {
           <label class="toggle"><input type="checkbox" data-pref="dayTasks"${prefs.dayTasks ? ' checked' : ''}>
             <span class="legend-swatch daytask"></span>Tasks planned for the day</label>
           <p class="hint">Colors come from each folder. Drag on the grid to add a block.</p>
+        </section>
+        <section class="card">
+          <h3>Appointments</h3>
+          <button type="button" class="btn btn-sm" data-import>${icons.upload}Import invite, email or calendar</button>
+          <p class="hint">From an .ics file, a saved email (.eml), pasted text or a calendar link.
+            Or drop the file on the calendar.</p>
         </section>
         <section class="card" data-summary></section>
         <section class="card">
@@ -293,6 +300,8 @@ export async function mount(root) {
     }),
   );
   filterEl.addEventListener('input', renderDragList);
+  root.querySelector('[data-import]').addEventListener('click', () => openImportDialog());
+  acceptDroppedFiles(root.querySelector('.calendar-layout'));
   dragListEl.addEventListener('click', (e) => {
     const item = e.target.closest('.drag-task');
     if (item) openTaskDrawer(Number(item.dataset.taskId));

@@ -220,6 +220,11 @@ class TimeBlock(Base):
     recurrence_id: Mapped[int | None] = mapped_column(
         ForeignKey("recurrences.id", ondelete="SET NULL"), index=True
     )
+    location: Mapped[str | None] = mapped_column(String(500))
+    # Imported appointments: the invite's UID (to update or cancel it on a later import)
+    # and where it came from ("team.ics", "Email: Sprint review").
+    external_uid: Mapped[str | None] = mapped_column(String(255))
+    source: Mapped[str | None] = mapped_column(String(300))
 
     task: Mapped[Task | None] = relationship(back_populates="time_blocks")
     folder: Mapped[Folder | None] = relationship()

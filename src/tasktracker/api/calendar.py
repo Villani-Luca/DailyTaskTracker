@@ -3,6 +3,7 @@ from fastapi import APIRouter, Response
 from tasktracker.api.deps import CurrentUser, SessionDep
 from tasktracker.models import BlockKind
 from tasktracker.schemas import (
+    AppointmentSummary,
     LocalDateTime,
     SeriesScope,
     TimeBlockCreate,
@@ -24,6 +25,15 @@ def list_blocks(
     kind: BlockKind | None = None,
 ):
     return calendar.list_blocks(session, user.id, starts_at, ends_at, kind)
+
+
+@router.get("/appointments", response_model=list[AppointmentSummary])
+def list_appointments(
+    session: SessionDep, user: CurrentUser, folder_id: int | None = None, inbox: bool = False
+):
+    """Appointments (blocks without a task) of a folder, of the inbox, or all of them;
+    a repeating series is one entry."""
+    return calendar.list_appointments(session, user.id, folder_id, inbox)
 
 
 @router.post("/blocks", response_model=TimeBlockRead, status_code=201)

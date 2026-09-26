@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Engine, create_engine, event, make_url
+from sqlalchemy import Engine, create_engine, event, inspect, make_url, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -64,3 +64,35 @@ def init_db(engine: Engine) -> None:
     from tasktracker import models  # noqa: F401  (registers the tables on Base.metadata)
 
     Base.metadata.create_all(engine)
+    add_missing_columns(engine)
+
+
+def add_missing_columns(engine: Engine) -> None:
+    """Add columns that are new in the models to tables that already exist.
+
+    ``create_all`` makes missing tables but never alters existing ones. New columns are
+    nullable, so adding them to a table full of data is safe on SQLite and Postgres.
+    """
+    existing = inspect(engine)
+    tables = set(existing.get_table_names())
+    preparer = engine.dialect.identifier_preparer
+    with engine.begin() as connection:
+        for table in Base.metadata.sorted_tables:
+            if table.name not in tables:
+                continue
+            present = {c["name"] for c in existing.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in present:
+                    continue
+                if not column.nullable:
+                    raise RuntimeError(
+                        f"Column {table.name}.{column.name} is missing and not nullable: "
+                        "migrate the database by hand"
+                    )
+                column_type = column.type.compile(dialect=engine.dialect)
+                connection.execute(
+                    text(
+                        f"ALTER TABLE {preparer.quote(table.name)} "
+                        f"ADD COLUMN {preparer.quote(column.name)} {column_type}"
+                    )
+                )

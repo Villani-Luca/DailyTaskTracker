@@ -32,6 +32,14 @@ def occurrences(
     return starts
 
 
+def occurrence_days(
+    first: date, frequency: Frequency, interval: int, weekdays: list[int], until: date
+) -> Iterator[date]:
+    """Every day an event of the series falls on, ``first`` included, with no limit."""
+    yield first
+    yield from _days_after(first, frequency, interval, weekdays, until)
+
+
 def _days_after(
     first: date, frequency: Frequency, interval: int, weekdays: list[int], until: date
 ) -> Iterator[date]:

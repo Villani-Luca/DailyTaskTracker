@@ -1,14 +1,17 @@
 // One folder (or the inbox): stats, quick add, filterable task list, edit/delete.
 
 import { api } from '../api.js';
+import { openBlockDialog } from '../components/blockDialog.js';
 import { confirmDialog } from '../components/dialog.js';
 import { openFolderDialog } from '../components/folderDialog.js';
+import { acceptDroppedFiles, openImportDialog } from '../components/importDialog.js';
 import { kpiHTML } from '../components/kpi.js';
 import { statusBarHTML } from '../components/statusBar.js';
 import { bindTaskActions, taskListHTML } from '../components/taskList.js';
 import { folderById, loadFolders, notifyChange } from '../store.js';
 import {
-  PRIORITIES, STATUSES, esc, fmtMinutes, icons, setPageTitle, showError, toast,
+  PRIORITIES, STATUSES, dateISO, describeRecurrence, esc, fmtMinutes, fmtTime, icons, relDay, setPageTitle,
+  showError, toast,
 } from '../util.js';
 
 const INBOX = { id: null, name: 'Inbox', color: '#8a8f98', description: 'Tasks without a folder.' };
@@ -31,6 +34,55 @@ function statsHTML(s) {
       ${kpiHTML('Estimated', fmtMinutes(s.estimate_minutes))}
     </div>
   </section>`;
+}
+
+function appointmentHTML(a) {
+  const b = a.block;
+  const meta = [];
+  if (b.recurrence) {
+    const left = a.upcoming ? ` · ${a.upcoming} of ${a.events} to come` : ` · ${a.events} events`;
+    meta.push(`<span>${icons.repeat}${esc(describeRecurrence(b.recurrence, b.starts_at))}${left}</span>`);
+  } else if (a.events > 1) {
+    meta.push(`<span>${a.events} events</span>`);
+  }
+  if (b.location) meta.push(`<span class="appt-location">${icons.pin}${esc(b.location)}</span>`);
+  if (b.source) meta.push(`<span class="muted">From ${esc(b.source)}</span>`);
+  const spent = a.tracked_minutes ? ` · ${fmtMinutes(a.tracked_minutes)} spent` : '';
+  return `
+    <li><button type="button" class="appt-row" data-block-id="${b.id}">
+      <span class="appt-when">
+        <strong>${relDay(dateISO(new Date(b.starts_at)))}</strong>
+        <span>${fmtTime(b.starts_at)}${b.ends_at ? `–${fmtTime(b.ends_at)}` : ''}</span>
+      </span>
+      <i class="sch-bar kind-${b.kind}"></i>
+      <span class="appt-main">
+        <span class="appt-title">${esc(b.display_title)}</span>
+        ${meta.length ? `<span class="task-meta">${meta.join('')}</span>` : ''}
+      </span>
+      <span class="sch-duration">${fmtMinutes(b.duration_minutes)}${spent}</span>
+    </button></li>`;
+}
+
+function appointmentsHTML(list) {
+  const upcoming = list.filter((a) => a.upcoming);
+  const past = list.filter((a) => !a.upcoming);
+  return `
+    <div class="card-header">
+      <h2>Appointments</h2>
+      <button type="button" class="btn btn-sm" data-action="add-appointment">${icons.plus}Add</button>
+      <button type="button" class="btn btn-sm" data-action="import">${icons.upload}Import</button>
+    </div>
+    ${
+      upcoming.length
+        ? `<ul class="appt-list">${upcoming.map(appointmentHTML).join('')}</ul>`
+        : `<p class="empty">${past.length ? 'Nothing coming up.' : 'No appointments yet. Add one, or import an invite (.ics), an email or a calendar link. You can also drop a file here.'}</p>`
+    }
+    ${
+      past.length
+        ? `<details class="appt-past"><summary>Past (${past.length})</summary>
+             <ul class="appt-list">${past.map(appointmentHTML).join('')}</ul></details>`
+        : ''
+    }`;
 }
 
 const EMPTY_STATS = {
@@ -61,12 +113,16 @@ export async function mount(root, param) {
       <div class="chips" role="group" aria-label="Filter by status" data-chips></div>
       <input type="search" placeholder="Search tasksâ€¦" aria-label="Search tasks" data-search>
     </div>
-    <div data-list></div>`;
+    <div data-list></div>
+    <section class="card appointments" data-appointments></section>`;
 
   const header = root.querySelector('[data-header]');
   const list = root.querySelector('[data-list]');
   const chips = root.querySelector('[data-chips]');
   const form = root.querySelector('.quick-add');
+  const appointmentsEl = root.querySelector('[data-appointments]');
+  let pastOpen = false;
+  let appointmentBlocks = new Map();
 
   const renderList = () => {
     const q = search.trim().toLowerCase();
@@ -95,9 +151,11 @@ export async function mount(root, param) {
       root.innerHTML = '<div class="card empty-state"><p>This folder does not exist anymore. <a href="#/projects">Back to projects</a></p></div>';
       return;
     }
-    const [stats, folderTasks] = await Promise.all([
+    const filter = isInbox ? { inbox: true } : { folder_id: folderId };
+    const [stats, folderTasks, appointments] = await Promise.all([
       api.folders.stats(),
-      api.tasks.list(isInbox ? { inbox: true } : { folder_id: folderId }),
+      api.tasks.list(filter),
+      api.appointments(filter),
     ]);
     tasks = folderTasks;
     setPageTitle(folder.name, folder.color);
@@ -114,6 +172,13 @@ export async function mount(root, param) {
       stats.find((s) => s.folder_id === folderId) ?? EMPTY_STATS,
     );
     renderList();
+    appointmentBlocks = new Map(appointments.map((a) => [a.block.id, a.block]));
+    appointmentsEl.innerHTML = appointmentsHTML(appointments);
+    const details = appointmentsEl.querySelector('.appt-past');
+    if (details) {
+      details.open = pastOpen;
+      details.addEventListener('toggle', () => (pastOpen = details.open));
+    }
   };
 
   chips.addEventListener('click', (e) => {
@@ -127,6 +192,15 @@ export async function mount(root, param) {
     renderList();
   });
   bindTaskActions(list);
+
+  appointmentsEl.addEventListener('click', (e) => {
+    const action = e.target.closest('[data-action]')?.dataset.action;
+    const row = e.target.closest('[data-block-id]');
+    if (action === 'add-appointment') openBlockDialog({ folderId });
+    else if (action === 'import') openImportDialog({ folderId });
+    else if (row) openBlockDialog({ block: appointmentBlocks.get(Number(row.dataset.blockId)) });
+  });
+  acceptDroppedFiles(appointmentsEl, () => ({ folderId }));
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();

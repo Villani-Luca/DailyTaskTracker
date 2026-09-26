@@ -23,6 +23,24 @@ see how much time you actually spend on them.
     weeks or months, until a date. Change one event, or this and the following ones;
     delete one, the following ones, or all. Dragging on the grid moves one event only.
   - The side panel totals time spent and planned per folder for the visible range.
+- **Import appointments** from an **.ics** file, an **email** (a saved `.eml`, with or
+  without an invite), **pasted text**, or a **calendar link** (`https://` or `webcal://`,
+  e.g. a Google or Outlook iCal address). Drop a file on the calendar or on a folder's
+  appointments, or use *Import*. A preview shows every event (new, updates one imported
+  before, or cancels one); pick the ones you want and the **folder** they all go into,
+  repeating ones included.
+  - Repeating invites become series, like the ones you make in the app: daily, weekly on
+    some days ("every weekday" too), monthly or yearly, with their exceptions and moved
+    instances. Other rules (e.g. "second Tuesday") import one event and say so.
+  - Location, organizer, attendees and the invite text are kept with each appointment,
+    with where it was imported from.
+  - Importing the same invite again updates it; a cancellation removes it. Time already
+    marked as spent is never touched.
+  - Past events are skipped unless you ask for them; a series that never ends is added
+    for a year. All-day events become tasks planned for their day.
+  - An email or text without an invite opens a new appointment with its subject and text.
+- **Folder pages** list the folder's appointments next to its tasks: upcoming ones (a
+  series once, with how many events are left) and past ones, with location and source.
 - **Reports**: pick any range (this week, last month, a custom one...) and a project (or
   all of them), and see the time spent and planned per day, per folder and per task, and
   how many tasks were completed. **Export to Excel** downloads the same report, plus every
@@ -124,7 +142,8 @@ src/tasktracker/
   models.py       SQLAlchemy models: User, LoginSession, Folder, Task, Comment, TimeBlock,
                   Recurrence
   schemas.py      Pydantic models for everything in and out of the API
-  services/       business rules (auth, folders, tasks, calendar, reports)
+  services/       business rules (auth, folders, tasks, calendar, reports, imports);
+                  ical.py reads iCalendar data
   api/            thin FastAPI routers over the services, under /api
   main.py         app factory; __main__.py is the `tasktracker` command
   users_cli.py    the `tasktracker-users` command
@@ -150,6 +169,13 @@ Design decisions worth knowing:
   the following events" splits the series and makes the later events again from the
   changed one. Series changes and deletes only touch *planned* events: time already
   spent is history. A series has at most 500 events.
+- **Imports are two stateless calls.** `POST /api/import/preview` reads the source and
+  saves nothing; `POST /api/import` sends the same source again with the picked events
+  and the folder. Imported blocks keep the invite's `UID` (`external_uid`), which is how
+  a later import finds what to update or cancel. iCalendar is read by a small parser in
+  `services/ical.py` (no extra dependency), including Outlook's Windows time zone names.
+  Calendar links are fetched by the server: only public `http(s)` addresses, at most
+  5 MB, redirects checked too.
 - **Business rules live in `services/`**, not in the routes:
   - Placing a task on the calendar plans it for that day, unless you picked a different
     date yourself. The planned date then follows the block when you drag it.
@@ -174,10 +200,13 @@ uv run ruff format src tests   # format
 uv run tasktracker --reload    # dev server
 ```
 
-The database schema is created on startup with `create_all`. That creates missing
-tables but does not alter existing ones, so once the schema changes after real data
-exists, add [Alembic](https://alembic.sqlalchemy.org) migrations. A database created
-before user accounts existed has no `user_id` columns: delete it and start again.
+The database schema is created on startup with `create_all`, which creates missing
+tables; `add_missing_columns` (in `db.py`) then adds new **nullable** columns to
+existing tables, so an existing database (SQLite or Postgres) picks up new fields such
+as a block's location on the next start. Anything more (a non-nullable column, a
+renamed or changed one) needs real migrations, e.g. with
+[Alembic](https://alembic.sqlalchemy.org). A database created before user accounts
+existed has no `user_id` columns: delete it and start again.
 
 ## Roadmap: AI
 

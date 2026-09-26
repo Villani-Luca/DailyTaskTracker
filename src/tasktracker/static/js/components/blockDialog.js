@@ -87,7 +87,13 @@ function sameRule(a, b) {
   return key(a) === key(b);
 }
 
-export async function openBlockDialog({ block = null, start = null, end = null, kind = 'planned', taskId = null } = {}) {
+/**
+ * Edit `block`, or add one. A new one can start prefilled: `title`, `notes` and
+ * `folderId` for an appointment (from the folder page, or an email without an invite).
+ */
+export async function openBlockDialog({
+  block = null, start = null, end = null, kind = 'planned', taskId = null, title = '', notes = '', folderId = null,
+} = {}) {
   let tasks;
   try {
     tasks = await api.tasks.list();
@@ -108,7 +114,7 @@ export async function openBlockDialog({ block = null, start = null, end = null, 
   const startValue = toInputDateTime(startDate);
   const endValue = toInputDateTime(block?.ends_at ? new Date(block.ends_at) : block ? new Date() : end);
   const folderOptions = store.folders
-    .map((f) => `<option value="${f.id}"${f.id === block?.folder_id ? ' selected' : ''}>${esc(f.name)}</option>`)
+    .map((f) => `<option value="${f.id}"${f.id === (block ? block.folder_id : folderId) ? ' selected' : ''}>${esc(f.name)}</option>`)
     .join('');
   // Series actions apply to planned events only: time already spent is history.
   const series = block?.kind === 'planned' ? block.recurrence : null;
@@ -129,7 +135,10 @@ export async function openBlockDialog({ block = null, start = null, end = null, 
       </label>
       <div class="appointment-fields" data-appointment>
         <label class="stacked">Title
-          <input name="title" maxlength="200" placeholder="e.g. Dentist, team meeting" value="${esc(block?.title ?? '')}">
+          <input name="title" maxlength="200" placeholder="e.g. Dentist, team meeting" value="${esc(block?.title ?? title)}">
+        </label>
+        <label class="stacked">Location
+          <input name="location" maxlength="500" placeholder="Room, address or meeting link" value="${esc(block?.location ?? '')}">
         </label>
         <label class="stacked">Folder <span class="muted">(sets the color)</span>
           <select name="folder_id"><option value="">Inbox</option>${folderOptions}</select>
@@ -143,7 +152,8 @@ export async function openBlockDialog({ block = null, start = null, end = null, 
         ${series ? `<p class="series-note">${icons.repeat}${esc(describeRecurrence(series, block.starts_at))}. Dragging on the calendar moves one event only.</p>` : ''}
         ${repeatHTML(series, startDate)}
       </div>
-      <label class="stacked">Notes<textarea name="notes" rows="2">${esc(block?.notes ?? '')}</textarea></label>
+      <label class="stacked">Notes<textarea name="notes" rows="${(block?.notes ?? notes).length > 120 ? 5 : 2}">${esc(block?.notes ?? notes)}</textarea></label>
+      ${block?.source ? `<p class="hint">Imported from ${esc(block.source)}</p>` : ''}
       <footer class="dialog-footer">
         ${block ? '<button type="button" class="btn btn-danger-ghost" data-action="delete">Delete</button>' : ''}
         ${block?.kind === 'planned' ? '<button type="button" class="btn" data-action="spent" title="I spent this time: turn it into tracked time">Mark as spent</button>' : ''}
@@ -242,6 +252,7 @@ export async function openBlockDialog({ block = null, start = null, end = null, 
       task_id: linkedTask,
       title: linkedTask ? '' : title,
       folder_id: linkedTask || !f.folder_id.value ? null : Number(f.folder_id.value),
+      location: linkedTask ? '' : f.location.value.trim(),
       starts_at: f.starts_at.value,
       notes: f.notes.value,
     };
