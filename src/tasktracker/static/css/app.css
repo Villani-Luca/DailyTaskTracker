@@ -239,7 +239,7 @@ a:hover { text-decoration: underline; }
   font-variant-numeric: tabular-nums;
 }
 
-.section-title { margin-top: 4px; }
+.section-title { margin-top: 4px;margin-bottom: 8px; }
 .subhead { margin: 18px 0 8px; color: var(--text-2); }
 .empty { color: var(--muted); padding: 6px 0; }
 .empty-state { text-align: center; padding: 32px; color: var(--text-2); }
@@ -310,7 +310,7 @@ label.stacked input, label.stacked select, label.stacked textarea { font-size: 1
 
 /* --- KPI tiles -------------------------------------------------------------------- */
 
-.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;}
 .kpi {
   display: flex;
   flex-direction: column;
@@ -847,7 +847,7 @@ dialog.confirm { width: min(420px, calc(100vw - 32px)); }
 
 @media (max-width: 1100px) {
   .calendar-layout { grid-template-columns: 1fr; }
-  .overview-grid, .folder-stats { grid-template-columns: 1fr; }
+  .overview-grid, .folder-stats { grid-template-columns: 1fr; margin-bottom: 20px; margin-top: 20px; }
 }
 
 @media (max-width: 760px) {
